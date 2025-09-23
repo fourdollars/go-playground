@@ -1,86 +1,168 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"log"
-	"net"
 	"net/http"
-	"net/http/cgi"
-	"net/http/fcgi"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
+
+	fcgiclient "github.com/tomasen/fcgi_client"
 )
 
 const (
-	webRoot = "/var/www/html"
+	webRoot   = "/var/www/html"
+	socketDir = "/tmp/fcgi-sockets"
+)
+
+type childProcess struct {
+	cmd        *exec.Cmd
+	socketPath string
+	lastUsed   time.Time
+}
+
+var (
+	childProcesses   = make(map[string]*childProcess)
+	childProcessesMu sync.Mutex
 )
 
 func main() {
-	// systemd provides the socket listener as file descriptor 3
-	f := os.NewFile(3, "socket")
-	if f == nil {
-		log.Fatal("Spawner must be run from systemd socket activation.")
-	}
-	l, err := net.FileListener(f)
-	if err != nil {
-		log.Fatalf("Failed to create listener from file: %v", err)
-	}
-	defer l.Close()
-
-	handler := http.HandlerFunc(spawnerHandler)
-	if err := fcgi.Serve(l, handler); err != nil {
-		log.Printf("fcgi.Serve failed: %v", err)
+	// The spawner is a regular HTTP server that will be started by supervisor.
+	// Nginx will proxy requests to this server.
+	http.HandleFunc("/", spawnerHandler)
+	log.Println("Spawner listening on :9000")
+	if err := http.ListenAndServe(":9000", nil); err != nil {
+		log.Fatal(err)
 	}
 }
 
 func spawnerHandler(w http.ResponseWriter, r *http.Request) {
-	scriptFilename := r.Header.Get("SCRIPT_FILENAME")
-	if scriptFilename == "" {
-		// Nginx's fastcgi_param SCRIPT_FILENAME is what we use to find the app.
-		// It's passed as a header by the fcgi package.
-		http.Error(w, "Internal Server Error: SCRIPT_FILENAME not set", http.StatusInternalServerError)
-		log.Println("SCRIPT_FILENAME not set in FastCGI request")
+	scriptPath := r.URL.Path
+	if scriptPath == "" {
+		http.Error(w, "Internal Server Error: script path is empty", http.StatusInternalServerError)
+		log.Println("script path is empty in request")
 		return
 	}
 
-	// Security: Use Base to prevent directory traversal. e.g. /app-hello.fcgi
-	appName := filepath.Base(scriptFilename)
+	appName := filepath.Base(scriptPath)
 	targetPath := filepath.Join(webRoot, appName)
 
-	// Security: Double-check the path is within our web root.
 	if !strings.HasPrefix(targetPath, webRoot) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
-		log.Printf("Forbidden: Attempted directory traversal: %s", scriptFilename)
+		log.Printf("Forbidden: Attempted directory traversal: %s", scriptPath)
 		return
 	}
 
-	// Check if the file exists and is executable
-	info, err := os.Stat(targetPath)
-	if os.IsNotExist(err) {
-		http.NotFound(w, r)
-		log.Printf("Not Found: %s", targetPath)
-		return
-	}
+	child, err := getOrCreateChild(targetPath)
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		log.Printf("Error stating file %s: %v", targetPath, err)
-		return
-	}
-	if info.Mode()&0111 == 0 { // Check for execute permission
-		http.Error(w, "Forbidden: File is not executable", http.StatusForbidden)
-		log.Printf("Forbidden: %s is not executable", targetPath)
+		log.Printf("Error getting or creating child process for %s: %v", targetPath, err)
 		return
 	}
 
-	// Use cgi.Handler to execute the script.
-	// The child process will be a Go app using fcgi.Serve(nil, ...), which
-	// means it acts like a CGI script reading from stdin and writing to stdout.
-	cgiHandler := &cgi.Handler{
-		Path:   targetPath,
-		Root:   "/", // Root is not super relevant here as Path is absolute
-		Dir:    webRoot,
-		Stderr: log.Writer(), // Log child process errors
+	proxyRequest(w, r, child)
+}
+
+func getOrCreateChild(appPath string) (*childProcess, error) {
+	childProcessesMu.Lock()
+	defer childProcessesMu.Unlock()
+
+	if child, exists := childProcesses[appPath]; exists {
+		// Simple keep-alive: just check if the process is still running.
+		if child.cmd.ProcessState == nil || !child.cmd.ProcessState.Exited() {
+			child.lastUsed = time.Now()
+			return child, nil
+		}
+		// Process has exited, so we'll create a new one.
+		log.Printf("Child process for %s has exited. Restarting...", appPath)
 	}
 
-	cgiHandler.ServeHTTP(w, r)
+	if _, err := os.Stat(appPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("application not found: %s", appPath)
+	}
+
+	socketPath := filepath.Join(socketDir, filepath.Base(appPath)+".sock")
+	if err := os.MkdirAll(socketDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create socket directory: %v", err)
+	}
+	// Clean up old socket file if it exists
+	_ = os.Remove(socketPath)
+
+	cmd := exec.Command(appPath, socketPath)
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start application %s: %v", appPath, err)
+	}
+
+	// Wait for the socket file to be created by the child
+	for i := 0; i < 100; i++ {
+		if _, err := os.Stat(socketPath); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	child := &childProcess{
+		cmd:        cmd,
+		socketPath: socketPath,
+		lastUsed:   time.Now(),
+	}
+	childProcesses[appPath] = child
+
+	log.Printf("Started new child process for %s (PID: %d) on socket %s", appPath, cmd.Process.Pid, child.socketPath)
+
+	return child, nil
+}
+
+func proxyRequest(w http.ResponseWriter, r *http.Request, child *childProcess) {
+	fcgi, err := fcgiclient.Dial("unix", child.socketPath)
+	if err != nil {
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		log.Printf("Failed to connect to child application %s: %v", child.socketPath, err)
+		return
+	}
+	defer fcgi.Close()
+
+	env := make(map[string]string)
+	env["REQUEST_METHOD"] = r.Method
+	env["SERVER_PROTOCOL"] = r.Proto
+	env["QUERY_STRING"] = r.URL.RawQuery
+	env["CONTENT_TYPE"] = r.Header.Get("Content-Type")
+	env["CONTENT_LENGTH"] = fmt.Sprintf("%d", r.ContentLength)
+	env["SCRIPT_FILENAME"] = child.cmd.Path
+	env["SCRIPT_NAME"] = r.URL.Path
+	env["REQUEST_URI"] = r.URL.RequestURI()
+	env["DOCUMENT_URI"] = r.URL.Path
+	env["DOCUMENT_ROOT"] = webRoot
+	env["SERVER_SOFTWARE"] = "go-fcgi-spawner"
+	env["REMOTE_ADDR"] = r.RemoteAddr
+
+	for name, headers := range r.Header {
+		for _, h := range headers {
+			env["HTTP_"+strings.ToUpper(strings.Replace(name, "-", "_", -1))] = h
+		}
+	}
+
+	resp, err := fcgi.Request(env, r.Body)
+	if err != nil {
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		log.Printf("FastCGI request failed: %v", err)
+		return
+	}
+
+	for k, vv := range resp.Header {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		log.Printf("Failed to copy response body: %v", err)
+	}
 }

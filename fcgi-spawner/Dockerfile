@@ -1,12 +1,12 @@
 # Stage 1: Build the Go applications
-FROM golang:1.18-alpine AS builder
+FROM golang:1.18 AS builder
 
 WORKDIR /app
 
 # Copy go.mod and go.sum to leverage Docker cache
 COPY go.mod ./
 # go.sum may not exist, so we copy it if it does
-COPY go.sum ./
+RUN touch go.sum
 RUN go mod download
 
 # Copy the rest of the source code
@@ -45,13 +45,7 @@ RUN chmod +x /var/www/html/*.fcgi && \
 # This configuration is based on the project's description.
 # It listens on port 80 and forwards requests for .fcgi files
 # to the spawner service via a Unix socket.
-RUN echo "server {\n\
-    listen 80 default_server;\n\
-    root /var/www/html;\n\
-    server_name _;\n\
-\n    index index.html index.htm;\n\
-\n    location / {\n        try_files $uri $uri/ =404;\n    }\n\
-\n    # All requests ending in .fcgi are sent to the spawner service.\n    location ~ \.fcgi$ {\n        include fastcgi_params;\n        # This must match the socket path used by the spawner service.\n        # We assume /var/run/fcgi-spawner.sock as a sensible default.\n        fastcgi_pass unix:/var/run/fcgi-spawner.sock;\n        # SCRIPT_FILENAME tells the spawner which .fcgi file to execute.\n        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n    }\n}" > /etc/nginx/sites-available/go-fcgi.conf
+COPY configs/go-fcgi.conf /etc/nginx/sites-available/go-fcgi.conf
 
 # Disable the default Nginx site and enable our new site
 RUN rm -f /etc/nginx/sites-enabled/default && \
@@ -83,6 +77,7 @@ stderr_logfile_maxbytes=0\n\n" > /etc/supervisor/conf.d/supervisord.conf
 
 # Expose port 80 for HTTP traffic
 EXPOSE 80
+EXPOSE 9000
 
 # Set the default command to run supervisord
 CMD ["/usr/bin/supervisord"]
