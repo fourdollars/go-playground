@@ -97,7 +97,7 @@ curl http://localhost:8080/app-hello.fcgi
 curl http://localhost:8080/app-time.fcgi
 
 # Test the webhook app (POST request)
-curl -X POST -H "Content-Type: application/json" -d '{"key": "value"}' http://localhost:8080/webhook.fcgi
+curl -X POST -H "Content-Type: application/json" -d '{"key": "value"}' http://localhost:8080/webhook.fcgi?id=<Mattermost Channel ID>
 ```
 
 ## 🚀 Manual Deployment Guide
