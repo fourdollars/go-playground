@@ -18,21 +18,21 @@ The system leverages **systemd Socket Activation** to ensure that the core spawn
 The request lifecycle is as follows:
 
 ```
-                  +---------+      +------------------+      +-------------------+
-User Request      |         |      |                  |      |                   |
------------------>|  Nginx  |----->| systemd Socket   |----->|  Spawner Service  |
+                  +---------+      +-------------------+      +-------------------+
+User Request      |         |      |                   |      |                   |
+----------------->|  Nginx  |----->| systemd Socket    |----->|  Spawner Service  |
                   |         |      |(fcgi-spawner.sock)|      |  (spawner)        |
-                  +---------+      +------------------+      +---------+---------+
-                                                                       |
-                                                                       | Spawns the target
-                                                                       | FCGI application
-                                                                       v
-                                                           +-----------+-----------+
-                                                           |                       |
-                                                           |  Your Application     |
-                                                           | (e.g., app-hello.fcgi)|
-                                                           |                       |
-                                                           +-----------------------+
+                  +---------+      +-------------------+      +---------+---------+
+                                                                        |
+                                                                        | Spawns the target
+                                                                        | FCGI application
+                                                                        v
+                                                            +-----------+-----------+
+                                                            |                       |
+                                                            |  Your Application     |
+                                                            | (e.g., app-hello.fcgi)|
+                                                            |                       |
+                                                            +-----------------------+
 ```
 > **Note on Docker**: In the Docker environment, `systemd` is replaced by `supervisor`, but the core request flow from Nginx to the spawner remains the same.
 
@@ -43,7 +43,8 @@ fcgi-spawner/
 ├── cmd/                # Source code for all executables
 │   ├── spawner/        # The core Spawner service
 │   ├── app-hello/      # Example Application 1
-│   └── app-time/       # Example Application 2
+│   ├── app-time/       # Example Application 2
+│   └── webhook/        # Example Application 3 (Webhook handler)
 ├── configs/            # Nginx and systemd configuration templates
 ├── scripts/            # Automation scripts for building and deploying
 ├── web/                # Output directory for compiled .fcgi files (simulates /var/www/html)
@@ -82,6 +83,9 @@ curl http://localhost:8080/app-hello.fcgi
 
 # Test the time app
 curl http://localhost:8080/app-time.fcgi
+
+# Test the webhook app (POST request)
+curl -X POST -H "Content-Type: application/json" -d '{"key": "value"}' http://localhost:8080/webhook.fcgi
 ```
 
 ## 🚀 Manual Deployment Guide
@@ -92,7 +96,7 @@ This guide is for deploying the service directly on a Linux server with `systemd
 
 -   A Linux server (Ubuntu/Debian recommended)
 -   `sudo` access
--   Go 1.18+ build environment
+-   Go 1.23.0+ build environment
 -   Nginx installed
 
 ### Step 1: Build All Binaries
@@ -107,7 +111,7 @@ chmod +x scripts/build.sh
 ./scripts/build.sh
 ```
 
-After running, you will find the compiled `app-hello.fcgi` and `app-time.fcgi` in the `web/` directory, and the `spawner` executable in the project root.
+After running, you will find the compiled `app-hello.fcgi`, `app-time.fcgi`, and `webhook.fcgi` in the `web/` directory, and the `spawner` executable in the project root.
 
 ### Step 2: Deploy Files to the System
 
@@ -154,6 +158,9 @@ curl http://<your_server_ip>/app-hello.fcgi
 
 # Test the time app
 curl http://<your_server_ip>/app-time.fcgi
+
+# Test the webhook app (POST request)
+curl -X POST -H "Content-Type: application/json" -d '{"key": "value"}' http://<your_server_ip>/webhook.fcgi
 ```
 
 ## 💡 How to Add Your Own Application

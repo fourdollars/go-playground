@@ -1,5 +1,5 @@
 # Stage 1: Build the Go applications
-FROM golang:1.18 AS builder
+FROM golang:1.23 AS builder
 
 WORKDIR /app
 
@@ -35,6 +35,9 @@ RUN apt-get update && \
 # Copy compiled files from the builder stage
 COPY --from=builder /app/spawner /usr/local/bin/spawner
 COPY --from=builder /app/web/*.fcgi /var/www/html/
+
+# Create empty config files for the webhook app to prevent it from crashing.
+RUN touch /var/www/html/.webhook.fcgi.url /var/www/html/.webhook.fcgi.secret
 
 # Set correct permissions for the FCGI applications
 # This allows the web server user to execute them.
