@@ -1,2 +1,5 @@
 /spawner
 /web/*.fcgi
+/web/.webhook.fcgi.log
+/web/.webhook.fcgi.secret
+/web/.webhook.fcgi.url
