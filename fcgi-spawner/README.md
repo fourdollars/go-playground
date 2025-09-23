@@ -47,7 +47,7 @@ fcgi-spawner/
 │   └── webhook/        # Example Application 3 (Webhook handler)
 ├── configs/            # Nginx and systemd configuration templates
 ├── scripts/            # Automation scripts for building and deploying
-├── web/                # Output directory for compiled .fcgi files (simulates /var/www/html)
+├── web/                # Directory for compiled .fcgi files (to be mounted into the Docker container)
 ├── go.mod
 ├── Dockerfile          # For containerized deployment
 └── README.md
@@ -55,7 +55,7 @@ fcgi-spawner/
 
 ## 🐳 Docker Deployment
 
-This project includes a `Dockerfile` for easy, containerized deployment. This method bundles Nginx, the spawner, and all applications into a single image, making it portable and easy to run.
+This project includes a `Dockerfile` for easy, containerized deployment. This method bundles Nginx and the spawner into a single image. The FastCGI applications are expected to be mounted into the container from the host.
 
 #### Step 1: Build the Docker Image
 
@@ -65,15 +65,27 @@ From the root of the project, run the following command:
 docker build -t fcgi-spawner .
 ```
 
-#### Step 2: Run the Container
+#### Step 2: Build FastCGI Applications
 
-Run the container, mapping port 8080 on your host to port 80 in the container:
+Build your FastCGI applications on the host. The compiled binaries will be placed in the `web/` directory.
 
 ```bash
-docker run -d -p 8080:80 --name fcgi-container fcgi-spawner
+# Make the script executable
+chmod +x scripts/build.sh
+
+# Run the build script
+./scripts/build.sh
 ```
 
-#### Step 3: Test
+#### Step 3: Run the Container
+
+Run the container, mapping port 8080 on your host to port 80 in the container, and mounting the `web/` directory containing your compiled FCGI applications to `/var/www/html/` inside the container:
+
+```bash
+docker run -d -p 8080:80 -v "$(pwd)/web:/var/www/html" --name fcgi-container fcgi-spawner
+```
+
+#### Step 4: Test
 
 You can now test the endpoints.
 
@@ -170,17 +182,17 @@ curl -X POST -H "Content-Type: application/json" -d '{"key": "value"}' http://<y
 1.  **Create the Source Code**
     Create a new directory under `cmd/`, for example, `cmd/my-app`, and place your `main.go` file inside. Your application must use the `fcgi.Serve(nil, ...)` pattern.
 
-2.  **Rebuild the Image**
-    The build process defined in the `Dockerfile` will automatically find and compile your new application.
+2.  **Build the Application**
+    Run the build script to compile your new application. The binary will be placed in the `web/` directory.
     ```bash
-    docker build -t fcgi-spawner .
+    ./scripts/build.sh
     ```
 
-3.  **Run the New Container**
-    If you have an old container running, stop and remove it first.
+3.  **Run the Container**
+    If you have an old container running, stop and remove it first. Then run the container, ensuring you mount the `web/` directory.
     ```bash
     docker stop fcgi-container && docker rm fcgi-container
-    docker run -d -p 8080:80 --name fcgi-container fcgi-spawner
+    docker run -d -p 8080:80 -v "$(pwd)/web:/var/www/html" --name fcgi-container fcgi-spawner
     ```
 
 4.  **Done!**

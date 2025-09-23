@@ -18,10 +18,9 @@ RUN chmod +x /app/scripts/build.sh
 # Run the build script to compile the spawner and example apps
 RUN /app/scripts/build.sh
 
-# The build script places the spawner in the project root and apps in web/
-# Ensure they are executable for the next stage
+# The build script places the spawner in the project root.
+# Ensure it is executable for the next stage
 RUN chmod +x /app/spawner
-RUN chmod +x /app/web/*.fcgi
 
 # Stage 2: Setup the final image with Nginx and the spawner
 FROM ubuntu:22.04
@@ -34,15 +33,11 @@ RUN apt-get update && \
 
 # Copy compiled files from the builder stage
 COPY --from=builder /app/spawner /usr/local/bin/spawner
-COPY --from=builder /app/web/*.fcgi /var/www/html/
 
+# The /var/www/html/ directory is expected to be mounted externally,
+# containing the FCGI applications.
 # Create empty config files for the webhook app to prevent it from crashing.
 RUN touch /var/www/html/.webhook.fcgi.url /var/www/html/.webhook.fcgi.secret
-
-# Set correct permissions for the FCGI applications
-# This allows the web server user to execute them.
-RUN chmod +x /var/www/html/*.fcgi && \
-    chown www-data:www-data /var/www/html/*.fcgi
 
 # Create a basic Nginx site configuration for the Go FCGI apps.
 # This configuration is based on the project's description.
