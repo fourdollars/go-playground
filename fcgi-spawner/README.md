@@ -1,0 +1,154 @@
+# Go FastCGI Spawner
+
+This project provides a "spawner" service written in Go, designed to enable a convenient "drop-in" deployment model for FastCGI applications. Simply place a compiled Go FastCGI executable into a designated directory, and it becomes immediately accessible via Nginx without any changes to server configuration.
+
+The system leverages **systemd Socket Activation** to ensure that the core spawner service itself consumes no resources when idle, achieving **zero resource usage when inactive**.
+
+> **⚠️ Performance Warning:** This architecture prioritizes convenience at the cost of performance. The system spawns a new Go process for **every single HTTP request**, similar to the classic CGI model. This is suitable for internal tools, admin panels, or low-traffic services, but it is **not recommended** for high-performance, public-facing APIs.
+
+## ✨ Features
+
+-   **Drop-in Deployment**: Add new applications by simply uploading a compiled binary. No need to restart or reload Nginx or systemd.
+-   **Zero Idle Resource Usage**: Thanks to systemd socket activation, no Go processes are running when there are no requests.
+-   **Centralized Configuration**: A single, one-time setup for Nginx and systemd manages an unlimited number of FastCGI applications.
+-   **Security Conscious**: Includes built-in path safety checks to prevent directory traversal attacks.
+
+## 🏛️ Architecture
+
+The request lifecycle is as follows:
+
+```
+                  +---------+      +------------------+      +-------------------+
+User Request      |         |      |                  |      |                   |
+----------------->|  Nginx  |----->| systemd Socket   |----->|  Spawner Service  |
+                  |         |      |(fcgi-spawner.sock)|      |  (spawner)        |
+                  +---------+      +------------------+      +---------+---------+
+                                                                       |
+                                                                       | Spawns the target
+                                                                       | FCGI application
+                                                                       v
+                                                           +-----------+-----------+
+                                                           |                       |
+                                                           |  Your Application     |
+                                                           | (e.g., app-hello.fcgi)|
+                                                           |                       |
+                                                           +-----------------------+
+```
+
+## 📂 Project Structure
+
+```
+fcgi-spawner/
+├── cmd/                # Source code for all executables
+│   ├── spawner/        # The core Spawner service
+│   ├── app-hello/      # Example Application 1
+│   └── app-time/       # Example Application 2
+├── configs/            # Nginx and systemd configuration templates
+├── scripts/            # Automation scripts for building and deploying
+├── web/                # Output directory for compiled .fcgi files (simulates /var/www/html)
+├── go.mod
+└── README.md
+```
+
+## 🚀 Deployment Guide
+
+### Prerequisites
+
+-   A Linux server (Ubuntu/Debian recommended)
+-   `sudo` access
+-   Go 1.18+ build environment
+-   Nginx installed
+
+### Step 1: Build All Binaries
+
+A convenient build script is provided to compile the spawner and all example applications.
+
+```bash
+# Make the script executable
+chmod +x scripts/build.sh
+
+# Run the build script
+./scripts/build.sh
+```
+
+After running, you will find the compiled `app-hello.fcgi` and `app-time.fcgi` in the `web/` directory, and the `spawner` executable in the project root.
+
+### Step 2: Deploy Files to the System
+
+The deployment script copies the configuration files, spawner program, and example applications to their final destinations on the server.
+
+> **Note**: This script uses `sudo`. Please review the contents of `scripts/deploy.sh` to understand the actions it will perform.
+
+```bash
+# Make the script executable
+chmod +x scripts/deploy.sh
+
+# Run the deployment script
+./scripts/deploy.sh
+```
+
+### Step 3: Enable the Services
+
+1.  **Reload systemd and start the Spawner Socket**
+    ```bash
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now fcgi-spawner.socket
+    ```
+
+2.  **Check the Socket Status**
+    ```bash
+    sudo systemctl status fcgi-spawner.socket
+    ```
+    The status should be `active (listening)`.
+
+3.  **Enable the Nginx Configuration and Reload**
+    ```bash
+    sudo ln -s /etc/nginx/sites-available/go-fcgi.conf /etc/nginx/sites-enabled/
+    sudo nginx -t
+    sudo systemctl reload nginx
+    ```
+
+### Step 4: Test
+
+The deployment is complete. You can now test the endpoints using a browser or `curl`.
+
+```bash
+# Test the hello app
+curl http://<your_server_ip>/app-hello.fcgi
+
+# Test the time app
+curl http://<your_server_ip>/app-time.fcgi
+```
+
+## 💡 How to Add Your Own Application
+
+This is the primary advantage of this project.
+
+1.  **Create the Source Code**
+    Create a new directory under `cmd/`, for example, `cmd/my-app`, and place your `main.go` file inside. Your application must use the `fcgi.Serve(nil, ...)` pattern to read from stdin/stdout.
+
+2.  **Build**
+    Run the build script again: `./scripts/build.sh`. It will automatically find and compile your new application.
+
+3.  **Copy and Set Permissions**
+    Copy the newly generated binary from the `web/` directory to your server's web root (`/var/www/html`).
+    ```bash
+    sudo cp web/my-app.fcgi /var/www/html/
+    sudo chmod +x /var/www/html/my-app.fcgi
+    sudo chown www-data:www-data /var/www/html/my-app.fcgi
+    ```
+
+4.  **Done!**
+    You can now access your application at `http://<your_server_ip>/my-app.fcgi` with no further configuration required.
+
+## 🛠️ Troubleshooting
+
+If you encounter a `502 Bad Gateway` error, check the spawner service logs for clues:
+
+```bash
+sudo journalctl -u fcgi-spawner.service -f
+```
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).

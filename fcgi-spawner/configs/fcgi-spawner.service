@@ -1,0 +1,23 @@
+[Unit]
+Description=Go FCGI Spawner Service
+Requires=fcgi-spawner.socket
+
+[Service]
+ExecStart=/usr/local/bin/spawner
+User=www-data
+Group=www-data
+
+# Security settings
+PrivateTmp=true
+ProtectSystem=full
+NoNewPrivileges=true
+PrivateDevices=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target
