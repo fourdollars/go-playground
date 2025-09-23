@@ -180,7 +180,7 @@ curl -X POST -H "Content-Type: application/json" -d '{"key": "value"}' http://<y
 ### With Docker
 
 1.  **Create the Source Code**
-    Create a new directory under `cmd/`, for example, `cmd/my-app`, and place your `main.go` file inside. Your application must use the `fcgi.Serve(nil, ...)` pattern.
+    Create a new directory under `cmd/`, for example, `cmd/my-app`, and place your `main.go` file inside. Your application must accept a unix socket path as a command-line argument and use `fcgi.Serve` with a listener on that path.
 
 2.  **Build the Application**
     Run the build script to compile your new application. The binary will be placed in the `web/` directory.
@@ -201,7 +201,7 @@ curl -X POST -H "Content-Type: application/json" -d '{"key": "value"}' http://<y
 ### On a Linux Server (Manual)
 
 1.  **Create the Source Code**
-    Create a new directory under `cmd/`, for example, `cmd/my-app`, and place your `main.go` file inside. Your application must use the `fcgi.Serve(nil, ...)` pattern to read from stdin/stdout.
+    Create a new directory under `cmd/`, for example, `cmd/my-app`, and place your `main.go` file inside. Your application must accept a unix socket path as a command-line argument and use `fcgi.Serve` with a listener on that path.
 
 2.  **Build**
     Run the build script again: `./scripts/build.sh`. It will automatically find and compile your new application.
