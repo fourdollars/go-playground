@@ -64,7 +64,7 @@ stdout_logfile_maxbytes=0\n\
 stderr_logfile=/dev/stderr\n\
 stderr_logfile_maxbytes=0\n\
 \n[program:spawner]\n\
-command=/usr/local/bin/spawner\n\
+command=/usr/local/bin/spawner -webRoot /var/www/html -idleTimeout 1m -socketDir /tmp/fcgi-spawner-sockets\n\
 autostart=true\n\
 autorestart=true\n\
 priority=20\n\
