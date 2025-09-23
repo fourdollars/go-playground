@@ -9,7 +9,7 @@ The system leverages **systemd Socket Activation** to ensure that the core spawn
 ## ✨ Features
 
 -   **Drop-in Deployment**: Add new applications by simply uploading a compiled binary. No need to restart or reload Nginx or systemd.
--   **Zero Idle Resource Usage**: Thanks to systemd socket activation, no Go processes are running when there are no requests.
+-   **Zero Idle Resource Usage**: Thanks to systemd socket activation, no Go processes are running when there are no requests. *(Note: This applies to the manual `systemd` deployment, not the Docker deployment.)*
 -   **Centralized Configuration**: A single, one-time setup for Nginx and systemd manages an unlimited number of FastCGI applications.
 -   **Security Conscious**: Includes built-in path safety checks to prevent directory traversal attacks.
 
@@ -34,6 +34,7 @@ User Request      |         |      |                  |      |                  
                                                            |                       |
                                                            +-----------------------+
 ```
+> **Note on Docker**: In the Docker environment, `systemd` is replaced by `supervisor`, but the core request flow from Nginx to the spawner remains the same.
 
 ## 📂 Project Structure
 
@@ -47,10 +48,45 @@ fcgi-spawner/
 ├── scripts/            # Automation scripts for building and deploying
 ├── web/                # Output directory for compiled .fcgi files (simulates /var/www/html)
 ├── go.mod
+├── Dockerfile          # For containerized deployment
 └── README.md
 ```
 
-## 🚀 Deployment Guide
+## 🐳 Docker Deployment
+
+This project includes a `Dockerfile` for easy, containerized deployment. This method bundles Nginx, the spawner, and all applications into a single image, making it portable and easy to run.
+
+#### Step 1: Build the Docker Image
+
+From the root of the project, run the following command:
+
+```bash
+docker build -t fcgi-spawner .
+```
+
+#### Step 2: Run the Container
+
+Run the container, mapping port 8080 on your host to port 80 in the container:
+
+```bash
+docker run -d -p 8080:80 --name fcgi-container fcgi-spawner
+```
+
+#### Step 3: Test
+
+You can now test the endpoints.
+
+```bash
+# Test the hello app
+curl http://localhost:8080/app-hello.fcgi
+
+# Test the time app
+curl http://localhost:8080/app-time.fcgi
+```
+
+## 🚀 Manual Deployment Guide
+
+This guide is for deploying the service directly on a Linux server with `systemd`.
 
 ### Prerequisites
 
@@ -122,7 +158,28 @@ curl http://<your_server_ip>/app-time.fcgi
 
 ## 💡 How to Add Your Own Application
 
-This is the primary advantage of this project.
+### With Docker
+
+1.  **Create the Source Code**
+    Create a new directory under `cmd/`, for example, `cmd/my-app`, and place your `main.go` file inside. Your application must use the `fcgi.Serve(nil, ...)` pattern.
+
+2.  **Rebuild the Image**
+    The build process defined in the `Dockerfile` will automatically find and compile your new application.
+    ```bash
+    docker build -t fcgi-spawner .
+    ```
+
+3.  **Run the New Container**
+    If you have an old container running, stop and remove it first.
+    ```bash
+    docker stop fcgi-container && docker rm fcgi-container
+    docker run -d -p 8080:80 --name fcgi-container fcgi-spawner
+    ```
+
+4.  **Done!**
+    You can now access your application at `http://localhost:8080/my-app.fcgi`.
+
+### On a Linux Server (Manual)
 
 1.  **Create the Source Code**
     Create a new directory under `cmd/`, for example, `cmd/my-app`, and place your `main.go` file inside. Your application must use the `fcgi.Serve(nil, ...)` pattern to read from stdin/stdout.
@@ -143,8 +200,14 @@ This is the primary advantage of this project.
 
 ## 🛠️ Troubleshooting
 
-If you encounter a `502 Bad Gateway` error, check the spawner service logs for clues:
+### With Docker
+If you encounter a `502 Bad Gateway` or other errors, check the container's logs. `supervisor` directs the output of both Nginx and the spawner service to the container's stdout/stderr.
+```bash
+docker logs fcgi-container
+```
 
+### On a Linux Server (Manual)
+If you encounter a `502 Bad Gateway` error, check the spawner service logs for clues:
 ```bash
 sudo journalctl -u fcgi-spawner.service -f
 ```

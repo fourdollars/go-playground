@@ -1,0 +1,88 @@
+# Stage 1: Build the Go applications
+FROM golang:1.18-alpine AS builder
+
+WORKDIR /app
+
+# Copy go.mod and go.sum to leverage Docker cache
+COPY go.mod ./
+# go.sum may not exist, so we copy it if it does
+COPY go.sum ./
+RUN go mod download
+
+# Copy the rest of the source code
+COPY . .
+
+# Make build script executable
+RUN chmod +x /app/scripts/build.sh
+
+# Run the build script to compile the spawner and example apps
+RUN /app/scripts/build.sh
+
+# The build script places the spawner in the project root and apps in web/
+# Ensure they are executable for the next stage
+RUN chmod +x /app/spawner
+RUN chmod +x /app/web/*.fcgi
+
+# Stage 2: Setup the final image with Nginx and the spawner
+FROM ubuntu:22.04
+
+# Install Nginx and supervisor.
+# supervisor is used as a process manager since systemd is not available in Docker.
+RUN apt-get update && \
+    apt-get install -y nginx supervisor && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy compiled files from the builder stage
+COPY --from=builder /app/spawner /usr/local/bin/spawner
+COPY --from=builder /app/web/*.fcgi /var/www/html/
+
+# Set correct permissions for the FCGI applications
+# This allows the web server user to execute them.
+RUN chmod +x /var/www/html/*.fcgi && \
+    chown www-data:www-data /var/www/html/*.fcgi
+
+# Create a basic Nginx site configuration for the Go FCGI apps.
+# This configuration is based on the project's description.
+# It listens on port 80 and forwards requests for .fcgi files
+# to the spawner service via a Unix socket.
+RUN echo "server {\n\
+    listen 80 default_server;\n\
+    root /var/www/html;\n\
+    server_name _;\n\
+\n    index index.html index.htm;\n\
+\n    location / {\n        try_files $uri $uri/ =404;\n    }\n\
+\n    # All requests ending in .fcgi are sent to the spawner service.\n    location ~ \.fcgi$ {\n        include fastcgi_params;\n        # This must match the socket path used by the spawner service.\n        # We assume /var/run/fcgi-spawner.sock as a sensible default.\n        fastcgi_pass unix:/var/run/fcgi-spawner.sock;\n        # SCRIPT_FILENAME tells the spawner which .fcgi file to execute.\n        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n    }\n}" > /etc/nginx/sites-available/go-fcgi.conf
+
+# Disable the default Nginx site and enable our new site
+RUN rm -f /etc/nginx/sites-enabled/default && \
+    ln -s /etc/nginx/sites-available/go-fcgi.conf /etc/nginx/sites-enabled/
+
+# Create a supervisor configuration to run Nginx and the spawner.
+# In the original project, systemd is used for socket activation and service management.
+# In this Docker environment, supervisord provides a similar capability to manage long-running services.
+RUN echo "[supervisord]\n\
+nodaemon=true\n\
+\n[program:nginx]\n\
+command=/usr/sbin/nginx -g 'daemon off;'\n\
+autostart=true\n\
+autorestart=true\n\
+priority=10\n\
+stdout_logfile=/dev/stdout\n\
+stdout_logfile_maxbytes=0\n\
+stderr_logfile=/dev/stderr\n\
+stderr_logfile_maxbytes=0\n\
+\n[program:spawner]\n\
+command=/usr/local/bin/spawner\n\
+autostart=true\n\
+autorestart=true\n\
+priority=20\n\
+stdout_logfile=/dev/stdout\n\
+stdout_logfile_maxbytes=0\n\
+stderr_logfile=/dev/stderr\n\
+stderr_logfile_maxbytes=0\n\n" > /etc/supervisor/conf.d/supervisord.conf
+
+# Expose port 80 for HTTP traffic
+EXPOSE 80
+
+# Set the default command to run supervisord
+CMD ["/usr/bin/supervisord"]
