@@ -1,4 +1,4 @@
-# Stage 1: Build the Go applications
+# Stage 1: Build the Go spawner
 FROM golang:1.23 AS builder
 
 WORKDIR /app
@@ -12,13 +12,9 @@ RUN go mod download
 # Copy the rest of the source code
 COPY . .
 
-# Make build script executable
-RUN chmod +x /app/scripts/build.sh
+# Build the spawner
+RUN go build -o /app/spawner ./cmd/spawner
 
-# Run the build script to compile the spawner and example apps
-RUN /app/scripts/build.sh
-
-# The build script places the spawner in the project root.
 # Ensure it is executable for the next stage
 RUN chmod +x /app/spawner
 

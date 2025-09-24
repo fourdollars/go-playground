@@ -16,11 +16,15 @@ CONFIG_SRC="./configs"
 BUILD_ROOT="."
 WEB_SRC="./web"
 
+# --- Build Spawner ---
+echo "Building spawner..."
+go build -o "$BUILD_ROOT/spawner" ./cmd/spawner
+
 # --- Safety Check ---
-# Ensure build has been run
-if [ ! -f "$BUILD_ROOT/spawner" ] || [ ! -d "$WEB_SRC" ]; then
-    echo "Error: Spawner executable or web directory not found."
-    echo "Please run './scripts/build.sh' first."
+# Ensure FCGI apps have been built
+if [ ! -d "$WEB_SRC" ]; then
+    echo "Error: Web directory for FCGI applications not found."
+    echo "Please run './scripts/build.sh' first to build the FCGI applications."
     exit 1
 fi
 

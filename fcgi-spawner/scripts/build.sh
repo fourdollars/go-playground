@@ -1,14 +1,10 @@
 #!/bin/sh
 set -e
 
-echo "--- Building Go Binaries ---"
+echo "--- Building Go FCGI Applications ---"
 
-# Ensure output directories exist
+# Ensure output directory exists
 mkdir -p ./web
-
-# Build the spawner
-echo "Building spawner..."
-go build -o ./spawner ./cmd/spawner
 
 # Find all app directories in cmd/ and build them
 for app_path in ./cmd/*; do
@@ -23,5 +19,4 @@ for app_path in ./cmd/*; do
 done
 
 echo "--- Build Complete ---"
-echo "Spawner executable is at: ./spawner"
 echo "FCGI applications are in: ./web/"
