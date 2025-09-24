@@ -42,9 +42,10 @@ User Request      |         |      |                   |      |                 
 fcgi-spawner/
 ├── cmd/                # Source code for all executables
 │   ├── spawner/        # The core Spawner service
-│   ├── app-hello/      # Example Application 1
-│   ├── app-time/       # Example Application 2
-│   └── webhook/        # Example Application 3 (Webhook handler)
+│   ├── app-env/        # Example Application 1 (Environment variable and request inspector)
+│   ├── app-hello/      # Example Application 2
+│   ├── app-time/       # Example Application 3
+│   └── webhook/        # Example Application 4 (Webhook handler)
 ├── configs/            # Nginx and systemd configuration templates
 ├── scripts/            # Automation scripts for building and deploying
 ├── web/                # Directory for compiled .fcgi files (to be mounted into the Docker container)
@@ -95,6 +96,9 @@ curl http://localhost:8080/app-hello.fcgi
 
 # Test the time app
 curl http://localhost:8080/app-time.fcgi
+
+# Test the environment app
+curl http://localhost:8080/app-env.fcgi
 
 # Test the webhook app (POST request)
 curl -X POST -H "Content-Type: application/json" -d '{"key": "value"}' http://localhost:8080/webhook.fcgi?id=<Mattermost Channel ID>
@@ -170,6 +174,9 @@ curl http://<your_server_ip>/app-hello.fcgi
 
 # Test the time app
 curl http://<your_server_ip>/app-time.fcgi
+
+# Test the environment app
+curl http://<your_server_ip>/app-env.fcgi
 
 # Test the webhook app (POST request)
 curl -X POST -H "Content-Type: application/json" -d '{"key": "value"}' http://<your_server_ip>/webhook.fcgi
