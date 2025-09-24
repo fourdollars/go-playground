@@ -21,6 +21,7 @@ import (
 var (
 	webRoot            string
 	socketDir          string
+	listenAddr         string
 	defaultIdleTimeout time.Duration // New global variable for default idle timeout
 	childProcessesMu   sync.Mutex
 	childProcesses     = make(map[string]*childProcess)
@@ -76,6 +77,7 @@ func cleanupChildProcesses() {
 func main() {
 	flag.StringVar(&webRoot, "webRoot", "/web", "Root directory for web files")
 	flag.StringVar(&socketDir, "socketDir", "/tmp/fcgi-sockets", "Directory for FastCGI application sockets")
+	flag.StringVar(&listenAddr, "listenAddr", ":8080", "Address for the spawner to listen on (e.g., :8080)")
 	flag.DurationVar(&defaultIdleTimeout, "idleTimeout", 5*time.Minute, "Idle timeout for child processes (e.g., 1m, 5m, 1h)")
 	flag.Parse()
 
@@ -89,8 +91,8 @@ func main() {
 	go watchFcgiBinaries()
 
 	http.HandleFunc("/", spawnerHandler)
-	log.Println("Spawner listening on :9000")
-	if err := http.ListenAndServe(":9000", nil); err != nil {
+	log.Printf("Spawner listening on %s", listenAddr)
+	if err := http.ListenAndServe(listenAddr, nil); err != nil {
 		log.Fatal(err)
 	}
 }
