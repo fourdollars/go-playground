@@ -230,6 +230,7 @@ curl -X POST -H "Content-Type: application/json" -d '{"key": "value"}' http://<y
 If you encounter a `502 Bad Gateway` or other errors, check the container's logs. `supervisor` directs the output of both Nginx and the spawner service to the container's stdout/stderr.
 ```bash
 docker logs fcgi-container
+docker exec -it fcgi-container /bin/bash
 ```
 
 ### On a Linux Server (Manual)
