@@ -18,16 +18,55 @@ import (
 	fcgiclient "github.com/tomasen/fcgi_client"
 )
 
-var (
-	webRoot            string
-	staticRoot         string
-	socketDir          string
-	listenAddr         string
-	defaultIdleTimeout time.Duration // New global variable for default idle timeout
-	staticFileServer   http.Handler
-	childProcessesMu   sync.Mutex
-	childProcesses     = make(map[string]*childProcess)
-)
+// Config holds the spawner's configuration.
+type Config struct {
+	WebRoot            string
+	StaticRoot         string
+	SocketDir          string
+	ListenAddr         string
+	DefaultIdleTimeout time.Duration
+}
+
+// loadConfig parses command-line flags and returns a Config struct.
+func loadConfig() *Config {
+	cfg := &Config{}
+	flag.StringVar(&cfg.WebRoot, "webRoot", "/web", "Root directory for web files")
+	flag.StringVar(&cfg.StaticRoot, "staticRoot", "", "Optional root directory for static files. If specified, files in this directory will be served.")
+	flag.StringVar(&cfg.SocketDir, "socketDir", "/tmp/fcgi-sockets", "Directory for FastCGI application sockets")
+	flag.StringVar(&cfg.ListenAddr, "listenAddr", ":8080", "Address for the spawner to listen on (e.g., :8080)")
+	flag.DurationVar(&cfg.DefaultIdleTimeout, "idleTimeout", 5*time.Minute, "Idle timeout for child processes (e.g., 1m, 5m, 1h)")
+	flag.Parse()
+	return cfg
+}
+
+// Spawner manages FastCGI applications and serves static files.
+type Spawner struct {
+	Config           *Config
+	staticFileServer http.Handler
+	childProcessesMu sync.Mutex
+	childProcesses   map[string]*childProcess
+}
+
+// NewSpawner creates and initializes a new Spawner instance.
+func NewSpawner(cfg *Config) *Spawner {
+	s := &Spawner{
+		Config:         cfg,
+		childProcesses: make(map[string]*childProcess),
+	}
+
+	if cfg.StaticRoot != "" {
+		info, err := os.Stat(cfg.StaticRoot)
+		if err != nil {
+			log.Fatalf("Error accessing staticRoot %s: %v", cfg.StaticRoot, err)
+		}
+		if !info.IsDir() {
+			log.Fatalf("staticRoot %s is not a directory", cfg.StaticRoot)
+		}
+		log.Printf("Enabling static file serving from %s", cfg.StaticRoot)
+		s.staticFileServer = http.FileServer(noHiddenFS{http.Dir(cfg.StaticRoot)})
+	}
+	return s
+}
 
 type childProcess struct {
 	cmd           *exec.Cmd
@@ -38,10 +77,10 @@ type childProcess struct {
 	binaryModTime time.Time     // New field to store the modification time of the binary
 }
 
-func cleanupChildProcesses() {
+func (s *Spawner) cleanupChildProcesses() {
 	for {
-		childProcessesMu.Lock()
-		for appPath, child := range childProcesses {
+		s.childProcessesMu.Lock()
+		for appPath, child := range s.childProcesses {
 			// Check if process is still alive. On Unix, signal 0 can be used to check for existence.
 			// If the process is not alive, an error will be returned.
 			if child.cmd.Process.Signal(syscall.Signal(0)) != nil {
@@ -50,7 +89,7 @@ func cleanupChildProcesses() {
 				if _, err := child.cmd.Process.Wait(); err != nil {
 					log.Printf("Error waiting for child process %d: %v", child.cmd.Process.Pid, err)
 				}
-				delete(childProcesses, appPath)
+				delete(s.childProcesses, appPath)
 				if err := os.Remove(child.socketPath); err != nil {
 					log.Printf("Error removing socket file %s: %v", child.socketPath, err)
 				}
@@ -58,73 +97,57 @@ func cleanupChildProcesses() {
 			}
 
 			// Check for idle timeout
-			if defaultIdleTimeout > 0 && time.Since(child.lastUsed) > defaultIdleTimeout {
+			if s.Config.DefaultIdleTimeout > 0 && time.Since(child.lastUsed) > s.Config.DefaultIdleTimeout {
 				log.Printf("Child process for %s (PID: %d) has been idle for %s, terminating.", appPath, child.cmd.Process.Pid, time.Since(child.lastUsed).Round(time.Second))
 				_ = child.cmd.Process.Kill() // Terminate the process
 				// Wait for the process to ensure it's reaped and doesn't become a zombie
 				if _, err := child.cmd.Process.Wait(); err != nil {
 					log.Printf("Error waiting for child process %d: %v", child.cmd.Process.Pid, err)
 				}
-				delete(childProcesses, appPath)
+				delete(s.childProcesses, appPath)
 				if err := os.Remove(child.socketPath); err != nil {
 					log.Printf("Error removing socket file %s: %v", child.socketPath, err)
 				}
 			}
 		}
-		childProcessesMu.Unlock()
+		s.childProcessesMu.Unlock()
 		time.Sleep(5 * time.Second) // Check every 5 seconds
 	}
 }
 
 func main() {
-	flag.StringVar(&webRoot, "webRoot", "/web", "Root directory for web files")
-	flag.StringVar(&staticRoot, "staticRoot", "", "Optional root directory for static files. If specified, files in this directory will be served.")
-	flag.StringVar(&socketDir, "socketDir", "/tmp/fcgi-sockets", "Directory for FastCGI application sockets")
-	flag.StringVar(&listenAddr, "listenAddr", ":8080", "Address for the spawner to listen on (e.g., :8080)")
-	flag.DurationVar(&defaultIdleTimeout, "idleTimeout", 5*time.Minute, "Idle timeout for child processes (e.g., 1m, 5m, 1h)")
-	flag.Parse()
-
-	if staticRoot != "" {
-		info, err := os.Stat(staticRoot)
-		if err != nil {
-			log.Fatalf("Error accessing staticRoot %s: %v", staticRoot, err)
-		}
-		if !info.IsDir() {
-			log.Fatalf("staticRoot %s is not a directory", staticRoot)
-		}
-		log.Printf("Enabling static file serving from %s", staticRoot)
-		staticFileServer = http.FileServer(noHiddenFS{http.Dir(staticRoot)})
-	}
+	cfg := loadConfig() // Load configuration
+	spawner := NewSpawner(cfg)
 
 	// The spawner is a regular HTTP server that will be started by supervisor.
 	// Nginx will proxy requests to this server.
 
 	// Start the cleanup goroutine
-	go cleanupChildProcesses()
+	go spawner.cleanupChildProcesses()
 
 	// Start the file watcher goroutine
-	go watchFcgiBinaries()
+	go spawner.watchFcgiBinaries()
 
-	http.HandleFunc("/", spawnerHandler)
-	log.Printf("Spawner listening on %s", listenAddr)
-	if err := http.ListenAndServe(listenAddr, nil); err != nil {
+	http.HandleFunc("/", spawner.spawnerHandler)
+	log.Printf("Spawner listening on %s", spawner.Config.ListenAddr)
+	if err := http.ListenAndServe(spawner.Config.ListenAddr, nil); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func watchFcgiBinaries() {
+func (s *Spawner) watchFcgiBinaries() {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Fatal("Failed to create file watcher:", err)
 	}
 	defer watcher.Close()
 
-	err = watcher.Add(webRoot)
+	err = watcher.Add(s.Config.WebRoot)
 	if err != nil {
 		log.Fatal("Failed to add webRoot to watcher:", err)
 	}
 
-	log.Printf("Watching directory %s for changes to FCGI binaries", webRoot)
+	log.Printf("Watching directory %s for changes to FCGI binaries", s.Config.WebRoot)
 
 	for {
 		select {
@@ -137,14 +160,14 @@ func watchFcgiBinaries() {
 					appPath := event.Name
 					log.Printf("FCGI binary changed: %s. Terminating existing child process if any.", appPath)
 
-					childProcessesMu.Lock()
-					if child, exists := childProcesses[appPath]; exists {
+					s.childProcessesMu.Lock()
+					if child, exists := s.childProcesses[appPath]; exists {
 						log.Printf("Terminating old child process for %s (PID: %d)", appPath, child.cmd.Process.Pid)
 						_ = child.cmd.Process.Kill()
 						_ = os.Remove(child.socketPath) // Clean up socket file
-						delete(childProcesses, appPath)
+						delete(s.childProcesses, appPath)
 					}
-					childProcessesMu.Unlock()
+					s.childProcessesMu.Unlock()
 				}
 			}
 		case err, ok := <-watcher.Errors:
@@ -196,7 +219,7 @@ func (nhf noHiddenFile) Readdir(count int) ([]os.FileInfo, error) {
 	return visibleFiles, nil
 }
 
-func spawnerHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Spawner) spawnerHandler(w http.ResponseWriter, r *http.Request) {
 	scriptPath := r.URL.Path
 	if scriptPath == "" {
 		http.Error(w, "Internal Server Error: script path is empty", http.StatusInternalServerError)
@@ -205,9 +228,9 @@ func spawnerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	appName := filepath.Base(scriptPath)
-	targetPath := filepath.Join(webRoot, appName)
+	targetPath := filepath.Join(s.Config.WebRoot, appName)
 
-	if !strings.HasPrefix(targetPath, webRoot) {
+	if !strings.HasPrefix(targetPath, s.Config.WebRoot) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		log.Printf("Forbidden: Attempted directory traversal: %s", scriptPath)
 		return
@@ -216,19 +239,19 @@ func spawnerHandler(w http.ResponseWriter, r *http.Request) {
 	// Check if the requested path is an executable FCGI application
 	fileInfo, err := os.Stat(targetPath)
 	if err == nil && fileInfo.Mode().IsRegular() && (fileInfo.Mode().Perm()&0111 != 0) && strings.HasSuffix(targetPath, ".fcgi") {
-		child, err := getOrCreateChild(targetPath)
+		child, err := s.getOrCreateChild(targetPath)
 		if err != nil {
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			log.Printf("Error getting or creating child process for %s: %v", targetPath, err)
 			return
 		}
-		proxyRequest(w, r, child)
+		s.proxyRequest(w, r, child)
 		return
 	}
 
 	// If not an FCGI app, try serving as a static file
-	if staticFileServer != nil {
-		staticFileServer.ServeHTTP(w, r)
+	if s.staticFileServer != nil {
+		s.staticFileServer.ServeHTTP(w, r)
 		return
 	}
 
@@ -237,9 +260,9 @@ func spawnerHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Requested path %s is not a valid FCGI application and static file serving is disabled.", r.URL.Path)
 }
 
-func getOrCreateChild(appPath string) (*childProcess, error) {
-	childProcessesMu.Lock()
-	defer childProcessesMu.Unlock()
+func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
+	s.childProcessesMu.Lock()
+	defer s.childProcessesMu.Unlock()
 
 	fileInfo, err := os.Stat(appPath)
 	if os.IsNotExist(err) {
@@ -250,7 +273,7 @@ func getOrCreateChild(appPath string) (*childProcess, error) {
 	}
 	currentModTime := fileInfo.ModTime()
 
-	if child, exists := childProcesses[appPath]; exists {
+	if child, exists := s.childProcesses[appPath]; exists {
 		// Check if process is still alive and binary hasn't changed
 		if (child.cmd.ProcessState == nil || !child.cmd.ProcessState.Exited()) && !currentModTime.After(child.binaryModTime) {
 			child.lastUsed = time.Now()
@@ -280,11 +303,11 @@ func getOrCreateChild(appPath string) (*childProcess, error) {
 		if err := os.Remove(child.socketPath); err != nil {
 			log.Printf("Error removing socket file %s: %v", child.socketPath, err)
 		}
-		delete(childProcesses, appPath)
+		delete(s.childProcesses, appPath)
 	}
 
-	socketPath := filepath.Join(socketDir, filepath.Base(appPath)+".sock")
-	if err := os.MkdirAll(socketDir, 0755); err != nil {
+	socketPath := filepath.Join(s.Config.SocketDir, filepath.Base(appPath)+".sock")
+	if err := os.MkdirAll(s.Config.SocketDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create socket directory: %v", err)
 	}
 	// Clean up old socket file if it exists
@@ -310,20 +333,20 @@ func getOrCreateChild(appPath string) (*childProcess, error) {
 		socketPath:    socketPath,
 		lastUsed:      time.Now(),
 		binaryPath:    appPath,
-		idleTimeout:   defaultIdleTimeout, // Initialize with the default idle timeout
-		binaryModTime: currentModTime,     // Store the current modification time
+		idleTimeout:   s.Config.DefaultIdleTimeout, // Initialize with the default idle timeout
+		binaryModTime: currentModTime,              // Store the current modification time
 	}
-	childProcesses[appPath] = child
+	s.childProcesses[appPath] = child
 
 	log.Printf("Started new child process for %s (PID: %d) on socket %s", appPath, cmd.Process.Pid, child.socketPath)
 
 	return child, nil
 }
 
-func proxyRequest(w http.ResponseWriter, r *http.Request, child *childProcess) {
-	childProcessesMu.Lock()
+func (s *Spawner) proxyRequest(w http.ResponseWriter, r *http.Request, child *childProcess) {
+	s.childProcessesMu.Lock()
 	child.lastUsed = time.Now()
-	childProcessesMu.Unlock()
+	s.childProcessesMu.Unlock()
 
 	fcgi, err := fcgiclient.Dial("unix", child.socketPath)
 	if err != nil {
@@ -343,7 +366,7 @@ func proxyRequest(w http.ResponseWriter, r *http.Request, child *childProcess) {
 	env["SCRIPT_NAME"] = r.URL.Path
 	env["REQUEST_URI"] = r.URL.RequestURI()
 	env["DOCUMENT_URI"] = r.URL.Path
-	env["DOCUMENT_ROOT"] = webRoot
+	env["DOCUMENT_ROOT"] = s.Config.WebRoot
 	env["SERVER_SOFTWARE"] = "go-fcgi-spawner"
 	env["REMOTE_ADDR"] = r.RemoteAddr
 
