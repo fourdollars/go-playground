@@ -93,7 +93,7 @@ func main() {
 			log.Fatalf("staticRoot %s is not a directory", staticRoot)
 		}
 		log.Printf("Enabling static file serving from %s", staticRoot)
-		staticFileServer = http.FileServer(http.Dir(staticRoot))
+		staticFileServer = http.FileServer(noHiddenFS{http.Dir(staticRoot)})
 	}
 
 	// The spawner is a regular HTTP server that will be started by supervisor.
@@ -154,6 +154,46 @@ func watchFcgiBinaries() {
 			log.Println("Watcher error:", err)
 		}
 	}
+}
+
+// noHiddenFS is a file system that hides dot files.
+type noHiddenFS struct {
+	fs http.FileSystem
+}
+
+// Open implements the http.FileSystem interface.
+func (nhfs noHiddenFS) Open(name string) (http.File, error) {
+	// Disallow browsing of hidden files/directories
+	if strings.Contains(name, "/.") {
+		return nil, os.ErrNotExist
+	}
+
+	file, err := nhfs.fs.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return noHiddenFile{file}, nil
+}
+
+// noHiddenFile is a file that filters out hidden files from directory listings.
+type noHiddenFile struct {
+	http.File
+}
+
+// Readdir implements the http.File interface and filters out hidden files.
+func (nhf noHiddenFile) Readdir(count int) ([]os.FileInfo, error) {
+	files, err := nhf.File.Readdir(count)
+	if err != nil {
+		return nil, err
+	}
+
+	var visibleFiles []os.FileInfo
+	for _, f := range files {
+		if !strings.HasPrefix(f.Name(), ".") {
+			visibleFiles = append(visibleFiles, f)
+		}
+	}
+	return visibleFiles, nil
 }
 
 func spawnerHandler(w http.ResponseWriter, r *http.Request) {
