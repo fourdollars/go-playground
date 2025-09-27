@@ -20,9 +20,11 @@ import (
 
 var (
 	webRoot            string
+	staticRoot         string
 	socketDir          string
 	listenAddr         string
 	defaultIdleTimeout time.Duration // New global variable for default idle timeout
+	staticFileServer   http.Handler
 	childProcessesMu   sync.Mutex
 	childProcesses     = make(map[string]*childProcess)
 )
@@ -76,10 +78,23 @@ func cleanupChildProcesses() {
 
 func main() {
 	flag.StringVar(&webRoot, "webRoot", "/web", "Root directory for web files")
+	flag.StringVar(&staticRoot, "staticRoot", "", "Optional root directory for static files. If specified, files in this directory will be served.")
 	flag.StringVar(&socketDir, "socketDir", "/tmp/fcgi-sockets", "Directory for FastCGI application sockets")
 	flag.StringVar(&listenAddr, "listenAddr", ":8080", "Address for the spawner to listen on (e.g., :8080)")
 	flag.DurationVar(&defaultIdleTimeout, "idleTimeout", 5*time.Minute, "Idle timeout for child processes (e.g., 1m, 5m, 1h)")
 	flag.Parse()
+
+	if staticRoot != "" {
+		info, err := os.Stat(staticRoot)
+		if err != nil {
+			log.Fatalf("Error accessing staticRoot %s: %v", staticRoot, err)
+		}
+		if !info.IsDir() {
+			log.Fatalf("staticRoot %s is not a directory", staticRoot)
+		}
+		log.Printf("Enabling static file serving from %s", staticRoot)
+		staticFileServer = http.FileServer(http.Dir(staticRoot))
+	}
 
 	// The spawner is a regular HTTP server that will be started by supervisor.
 	// Nginx will proxy requests to this server.
@@ -160,20 +175,26 @@ func spawnerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Check if the requested path is an executable FCGI application
 	fileInfo, err := os.Stat(targetPath)
-	if os.IsNotExist(err) || !fileInfo.Mode().IsRegular() || (fileInfo.Mode().Perm()&0111 == 0) || !strings.HasSuffix(targetPath, ".fcgi") {
-		http.Error(w, "404 Not Found", http.StatusNotFound)
-		log.Printf("Requested path %s is not a valid FCGI application.", targetPath)
+	if err == nil && fileInfo.Mode().IsRegular() && (fileInfo.Mode().Perm()&0111 != 0) && strings.HasSuffix(targetPath, ".fcgi") {
+		child, err := getOrCreateChild(targetPath)
+		if err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			log.Printf("Error getting or creating child process for %s: %v", targetPath, err)
+			return
+		}
+		proxyRequest(w, r, child)
 		return
 	}
 
-	child, err := getOrCreateChild(targetPath)
-	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		log.Printf("Error getting or creating child process for %s: %v", targetPath, err)
+	// If not an FCGI app, try serving as a static file
+	if staticFileServer != nil {
+		staticFileServer.ServeHTTP(w, r)
 		return
 	}
 
-	proxyRequest(w, r, child)
+	// If we reach here, it's a 404
+	http.Error(w, "404 Not Found", http.StatusNotFound)
+	log.Printf("Requested path %s is not a valid FCGI application and static file serving is disabled.", r.URL.Path)
 }
 
 func getOrCreateChild(appPath string) (*childProcess, error) {

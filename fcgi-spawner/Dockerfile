@@ -30,10 +30,11 @@ RUN apt-get update && \
 # Copy compiled files from the builder stage
 COPY --from=builder /app/spawner /usr/local/bin/spawner
 
-# The /var/www/html/ directory is expected to be mounted externally,
-# containing the FCGI applications.
-# Create empty config files for the webhook app to prevent it from crashing.
-RUN touch /var/www/html/.webhook.fcgi.url /var/www/html/.webhook.fcgi.secret
+# The /var/www/fcgi/ directory is for FCGI applications (mounted externally).
+# The /var/www/html/ directory is for static files (can be mounted externally).
+# Create directories and empty config files for the webhook app to prevent it from crashing.
+RUN mkdir -p /var/www/fcgi /var/www/html && \
+    touch /var/www/fcgi/.webhook.fcgi.url /var/www/fcgi/.webhook.fcgi.secret
 
 # Create a basic Nginx site configuration for the Go FCGI apps.
 # This configuration is based on the project's description.
@@ -60,7 +61,7 @@ stdout_logfile_maxbytes=0\n\
 stderr_logfile=/dev/stderr\n\
 stderr_logfile_maxbytes=0\n\
 \n[program:spawner]\n\
-command=/usr/local/bin/spawner -webRoot /var/www/html -idleTimeout 1m -socketDir /tmp/fcgi-spawner-sockets -listenAddr :9000\n\
+command=/usr/local/bin/spawner -webRoot /var/www/fcgi -staticRoot /var/www/html -idleTimeout 1m -socketDir /tmp/fcgi-spawner-sockets -listenAddr :9000\n\
 autostart=true\n\
 autorestart=true\n\
 priority=20\n\

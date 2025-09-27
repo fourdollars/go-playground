@@ -3,7 +3,7 @@ Description=Go FCGI Spawner Service
 Requires=fcgi-spawner.socket
 
 [Service]
-ExecStart=/usr/local/bin/spawner
+ExecStart=/usr/local/bin/spawner -webRoot /var/www/fcgi -staticRoot /var/www/html
 User=www-data
 Group=www-data
 
