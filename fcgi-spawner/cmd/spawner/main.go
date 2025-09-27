@@ -68,13 +68,72 @@ func NewSpawner(cfg *Config) *Spawner {
 	return s
 }
 
+type processInterface interface {
+	Signal(os.Signal) error
+	Wait() (*os.ProcessState, error)
+	Kill() error
+	Pid() int // Add Pid() for logging
+}
+
+type cmdInterface interface {
+	Start() error
+	Process() processInterface
+	ProcessState() *os.ProcessState
+	Path() string // Add Path() for SCRIPT_FILENAME
+}
+
 type childProcess struct {
-	cmd           *exec.Cmd
+	cmd           cmdInterface
 	socketPath    string
 	lastUsed      time.Time
 	binaryPath    string
-	idleTimeout   time.Duration // New field for idle timeout
-	binaryModTime time.Time     // New field to store the modification time of the binary
+	idleTimeout   time.Duration
+	binaryModTime time.Time
+}
+
+// execCmdWrapper implements cmdInterface for *exec.Cmd
+type execCmdWrapper struct {
+	cmd *exec.Cmd
+}
+
+func (w *execCmdWrapper) Start() error {
+	return w.cmd.Start()
+}
+
+func (w *execCmdWrapper) Process() processInterface {
+	if w.cmd.Process == nil {
+		return nil
+	}
+	return &osProcessWrapper{w.cmd.Process}
+}
+
+func (w *execCmdWrapper) ProcessState() *os.ProcessState {
+	return w.cmd.ProcessState
+}
+
+func (w *execCmdWrapper) Path() string {
+	return w.cmd.Path
+}
+
+// osProcessWrapper implements processInterface for *os.Process
+type osProcessWrapper struct {
+	process *os.Process
+}
+
+func (w *osProcessWrapper) Signal(sig os.Signal) error {
+	return w.process.Signal(sig)
+}
+
+func (w *osProcessWrapper) Wait() (*os.ProcessState, error) {
+	return w.process.Wait()
+}
+
+func (w *osProcessWrapper) Kill() error {
+	return w.process.Kill()
+}
+
+func (w *osProcessWrapper) Pid() int {
+	return w.process.Pid
 }
 
 func (s *Spawner) cleanupChildProcesses() {
@@ -83,11 +142,11 @@ func (s *Spawner) cleanupChildProcesses() {
 		for appPath, child := range s.childProcesses {
 			// Check if process is still alive. On Unix, signal 0 can be used to check for existence.
 			// If the process is not alive, an error will be returned.
-			if child.cmd.Process.Signal(syscall.Signal(0)) != nil {
-				log.Printf("Child process for %s (PID: %d) is no longer running, removing from map.", appPath, child.cmd.Process.Pid)
+			if child.cmd.Process() != nil && child.cmd.Process().Signal(syscall.Signal(0)) != nil {
+				log.Printf("Child process for %s (PID: %d) is no longer running, removing from map.", appPath, child.cmd.Process().Pid())
 				// Wait for the process to ensure it's reaped and doesn't become a zombie
-				if _, err := child.cmd.Process.Wait(); err != nil {
-					log.Printf("Error waiting for child process %d: %v", child.cmd.Process.Pid, err)
+				if _, err := child.cmd.Process().Wait(); err != nil {
+					log.Printf("Error waiting for child process %d: %v", child.cmd.Process().Pid(), err)
 				}
 				delete(s.childProcesses, appPath)
 				if err := os.Remove(child.socketPath); err != nil {
@@ -98,11 +157,11 @@ func (s *Spawner) cleanupChildProcesses() {
 
 			// Check for idle timeout
 			if s.Config.DefaultIdleTimeout > 0 && time.Since(child.lastUsed) > s.Config.DefaultIdleTimeout {
-				log.Printf("Child process for %s (PID: %d) has been idle for %s, terminating.", appPath, child.cmd.Process.Pid, time.Since(child.lastUsed).Round(time.Second))
-				_ = child.cmd.Process.Kill() // Terminate the process
+				log.Printf("Child process for %s (PID: %d) has been idle for %s, terminating.", appPath, child.cmd.Process().Pid(), time.Since(child.lastUsed).Round(time.Second))
+				_ = child.cmd.Process().Kill() // Terminate the process
 				// Wait for the process to ensure it's reaped and doesn't become a zombie
-				if _, err := child.cmd.Process.Wait(); err != nil {
-					log.Printf("Error waiting for child process %d: %v", child.cmd.Process.Pid, err)
+				if _, err := child.cmd.Process().Wait(); err != nil {
+					log.Printf("Error waiting for child process %d: %v", child.cmd.Process().Pid(), err)
 				}
 				delete(s.childProcesses, appPath)
 				if err := os.Remove(child.socketPath); err != nil {
@@ -162,8 +221,8 @@ func (s *Spawner) watchFcgiBinaries() {
 
 					s.childProcessesMu.Lock()
 					if child, exists := s.childProcesses[appPath]; exists {
-						log.Printf("Terminating old child process for %s (PID: %d)", appPath, child.cmd.Process.Pid)
-						_ = child.cmd.Process.Kill()
+						log.Printf("Terminating old child process for %s (PID: %d)", appPath, child.cmd.Process().Pid())
+						_ = child.cmd.Process().Kill()
 						_ = os.Remove(child.socketPath) // Clean up socket file
 						delete(s.childProcesses, appPath)
 					}
@@ -275,30 +334,30 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 
 	if child, exists := s.childProcesses[appPath]; exists {
 		// Check if process is still alive and binary hasn't changed
-		if (child.cmd.ProcessState == nil || !child.cmd.ProcessState.Exited()) && !currentModTime.After(child.binaryModTime) {
+		if (child.cmd.ProcessState() == nil || !child.cmd.ProcessState().Exited()) && !currentModTime.After(child.binaryModTime) {
 			child.lastUsed = time.Now()
 			return child, nil
 		}
 		// Process has exited or binary has changed, so we'll terminate the old one and create a new one.
-		log.Printf("Child process for %s (PID: %d) has exited or binary changed. Terminating old process and restarting...", appPath, child.cmd.Process.Pid)
+		log.Printf("Child process for %s (PID: %d) has exited or binary changed. Terminating old process and restarting...", appPath, child.cmd.Process().Pid())
 		// Attempt graceful shutdown first
-		if child.cmd.Process != nil {
-			if err := child.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-				log.Printf("Error sending SIGTERM to child process %d: %v", child.cmd.Process.Pid, err)
+		if child.cmd.Process() != nil {
+			if err := child.cmd.Process().Signal(syscall.SIGTERM); err != nil {
+				log.Printf("Error sending SIGTERM to child process %d: %v", child.cmd.Process().Pid(), err)
 			}
 			// Give it a moment to shut down gracefully
 			time.Sleep(1 * time.Second)
 
 			// If it's still alive, forcefully kill it
-			if child.cmd.Process.Signal(syscall.Signal(0)) == nil { // Check if process is still alive
-				if err := child.cmd.Process.Kill(); err != nil {
-					log.Printf("Error sending SIGKILL to child process %d: %v", child.cmd.Process.Pid, err)
+			if child.cmd.Process() != nil && child.cmd.Process().Signal(syscall.Signal(0)) == nil { // Check if process is still alive
+				if err := child.cmd.Process().Kill(); err != nil {
+					log.Printf("Error sending SIGKILL to child process %d: %v", child.cmd.Process().Pid(), err)
 				}
 			}
 		}
 		// Wait for the process to ensure it's reaped and doesn't become a zombie
-		if _, err := child.cmd.Process.Wait(); err != nil {
-			log.Printf("Error waiting for child process %d: %v", child.cmd.Process.Pid, err)
+		if _, err := child.cmd.Process().Wait(); err != nil {
+			log.Printf("Error waiting for child process %d: %v", child.cmd.Process().Pid(), err)
 		}
 		if err := os.Remove(child.socketPath); err != nil {
 			log.Printf("Error removing socket file %s: %v", child.socketPath, err)
@@ -329,7 +388,7 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 	}
 
 	child := &childProcess{
-		cmd:           cmd,
+		cmd:           &execCmdWrapper{cmd: cmd}, // Wrap *exec.Cmd with execCmdWrapper
 		socketPath:    socketPath,
 		lastUsed:      time.Now(),
 		binaryPath:    appPath,
@@ -338,7 +397,7 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 	}
 	s.childProcesses[appPath] = child
 
-	log.Printf("Started new child process for %s (PID: %d) on socket %s", appPath, cmd.Process.Pid, child.socketPath)
+	log.Printf("Started new child process for %s (PID: %d) on socket %s", appPath, child.cmd.Process().Pid(), child.socketPath)
 
 	return child, nil
 }
@@ -362,7 +421,7 @@ func (s *Spawner) proxyRequest(w http.ResponseWriter, r *http.Request, child *ch
 	env["QUERY_STRING"] = r.URL.RawQuery
 	env["CONTENT_TYPE"] = r.Header.Get("Content-Type")
 	env["CONTENT_LENGTH"] = fmt.Sprintf("%d", r.ContentLength)
-	env["SCRIPT_FILENAME"] = child.cmd.Path
+	env["SCRIPT_FILENAME"] = child.cmd.Path()
 	env["SCRIPT_NAME"] = r.URL.Path
 	env["REQUEST_URI"] = r.URL.RequestURI()
 	env["DOCUMENT_URI"] = r.URL.Path
