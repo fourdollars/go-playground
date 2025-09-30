@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
@@ -171,6 +172,17 @@ func (s *Spawner) cleanupChildProcesses() {
 		}
 		s.childProcessesMu.Unlock()
 		time.Sleep(5 * time.Second) // Check every 5 seconds
+	}
+}
+
+// logStream reads from a stream (stdout/stderr) and logs each line with a prefix.
+func logStream(stream io.ReadCloser, appPath string, pid int, streamName string) {
+	scanner := bufio.NewScanner(stream)
+	for scanner.Scan() {
+		log.Printf("[%s/%d %s] %s", filepath.Base(appPath), pid, streamName, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("Error reading from %s stream for %s (PID: %d): %v", streamName, appPath, pid, err)
 	}
 }
 
@@ -373,11 +385,23 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 	_ = os.Remove(socketPath)
 
 	cmd := exec.Command(appPath, socketPath)
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = os.Stdout
+	// Capture stdout and stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdout pipe for %s: %v", appPath, err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stderr pipe for %s: %v", appPath, err)
+	}
+
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start application %s: %v", appPath, err)
 	}
+
+	// Start goroutines to log stdout and stderr
+	go logStream(stdout, appPath, cmd.Process.Pid, "stdout")
+	go logStream(stderr, appPath, cmd.Process.Pid, "stderr")
 
 	// Wait for the socket file to be created by the child
 	for i := 0; i < 100; i++ {

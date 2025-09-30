@@ -10,6 +10,7 @@ The system leverages **systemd Socket Activation** to ensure that the core spawn
 
 -   **Drop-in Deployment**: Add new FastCGI applications by simply uploading a compiled binary. No need to restart or reload Nginx or systemd.
 -   **Static File Serving**: Optionally serve static files like HTML, CSS, and JavaScript from a designated directory, just like a standard web server.
+-   **Child Process Logging**: Captures and logs the `stdout` and `stderr` of each spawned FastCGI application, prefixing each line with the app name and PID for easy debugging.
 -   **Zero Idle Resource Usage**: Thanks to systemd socket activation, no Go processes are running when there are no requests. *(Note: This applies to the manual `systemd` deployment, not the Docker deployment.)*
 -   **Centralized Configuration**: A single, one-time setup for Nginx and systemd manages an unlimited number of FastCGI applications and static content.
 -   **Security Conscious**: Includes built-in path safety checks to prevent directory traversal attacks.
@@ -24,6 +25,7 @@ User Request      |         |      |                   |      |                 
 ----------------->|  Nginx  |----->| systemd Socket    |----->|  Spawner Service  |
                   |         |      |(fcgi-spawner.sock)|      |  (spawner)        |
                   +---------+      +-------------------+      +---------+---------+
+                                                                        |
                                                                         |
                                                                         | Spawns FCGI app
                                                                         | or serves static file
@@ -279,15 +281,25 @@ The spawner can serve static files from a local directory by using the `-staticR
 
 ## 🛠️ Troubleshooting
 
+The spawner service now captures the `stdout` and `stderr` of the child FastCGI processes it manages. This is extremely useful for debugging your applications. The output from your application (e.g., from `log.Println()` or `fmt.Println()`) will appear in the spawner's main log stream, prefixed with the application name and PID.
+
+Example log output:
+```
+[app-hello.fcgi/12345 stdout] This is a log message from the hello application.
+```
+
 ### With Docker
-If you encounter a `502 Bad Gateway` or other errors, check the container's logs. `supervisor` directs the output of both Nginx and the spawner service to the container's stdout/stderr.
+If you encounter a `502 Bad Gateway` or other errors, check the container's logs. `supervisor` directs the output of both Nginx and the spawner service (including all child process logs) to the container's stdout/stderr.
 ```bash
 docker logs fcgi-container
+```
+To enter the container for further investigation:
+```bash
 docker exec -it fcgi-container /bin/bash
 ```
 
 ### On a Linux Server (Manual)
-If you encounter a `502 Bad Gateway` error, check the spawner service logs for clues:
+If you encounter a `502 Bad Gateway` error, check the spawner service logs for clues. This will include logs from the spawner itself and any child processes it has spawned.
 ```bash
 sudo journalctl -u fcgi-spawner.service -f
 ```
