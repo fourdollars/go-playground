@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -90,6 +91,7 @@ type childProcess struct {
 	binaryPath    string
 	idleTimeout   time.Duration
 	binaryModTime time.Time
+	listener      net.Listener // Add listener for stdio apps
 }
 
 // execCmdWrapper implements cmdInterface for *exec.Cmd
@@ -149,6 +151,9 @@ func (s *Spawner) cleanupChildProcesses() {
 				if _, err := child.cmd.Process().Wait(); err != nil {
 					log.Printf("Error waiting for child process %d: %v", child.cmd.Process().Pid(), err)
 				}
+				if child.listener != nil {
+					child.listener.Close()
+				}
 				delete(s.childProcesses, appPath)
 				if err := os.Remove(child.socketPath); err != nil {
 					log.Printf("Error removing socket file %s: %v", child.socketPath, err)
@@ -163,6 +168,9 @@ func (s *Spawner) cleanupChildProcesses() {
 				// Wait for the process to ensure it's reaped and doesn't become a zombie
 				if _, err := child.cmd.Process().Wait(); err != nil {
 					log.Printf("Error waiting for child process %d: %v", child.cmd.Process().Pid(), err)
+				}
+				if child.listener != nil {
+					child.listener.Close()
 				}
 				delete(s.childProcesses, appPath)
 				if err := os.Remove(child.socketPath); err != nil {
@@ -309,7 +317,7 @@ func (s *Spawner) spawnerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Check if the requested path is an executable FCGI application
 	fileInfo, err := os.Stat(targetPath)
-	if err == nil && fileInfo.Mode().IsRegular() && (fileInfo.Mode().Perm()&0111 != 0) && strings.HasSuffix(targetPath, ".fcgi") {
+	if err == nil && fileInfo.Mode().IsRegular() && (fileInfo.Mode().Perm()&0111 != 0) && (strings.HasSuffix(targetPath, ".fcgi") || strings.HasSuffix(targetPath, ".fcgi.stdio")) {
 		child, err := s.getOrCreateChild(targetPath)
 		if err != nil {
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -371,6 +379,9 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 		if _, err := child.cmd.Process().Wait(); err != nil {
 			log.Printf("Error waiting for child process %d: %v", child.cmd.Process().Pid(), err)
 		}
+		if child.listener != nil {
+			child.listener.Close()
+		}
 		if err := os.Remove(child.socketPath); err != nil {
 			log.Printf("Error removing socket file %s: %v", child.socketPath, err)
 		}
@@ -384,40 +395,99 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 	// Clean up old socket file if it exists
 	_ = os.Remove(socketPath)
 
-	cmd := exec.Command(appPath, socketPath)
-	// Capture stdout and stderr
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stdout pipe for %s: %v", appPath, err)
+	isStdio := strings.HasSuffix(appPath, ".fcgi.stdio")
+
+	var cmd *exec.Cmd
+	var ln net.Listener
+
+	if isStdio {
+		cmd = exec.Command(appPath)
+		var err error
+		ln, err = net.Listen("unix", socketPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create listener for stdio app: %v", err)
+		}
+
+		unixListener, ok := ln.(*net.UnixListener)
+		if !ok {
+			ln.Close()
+			return nil, fmt.Errorf("listener was not a UnixListener")
+		}
+
+		listenerFile, err := unixListener.File()
+		if err != nil {
+			ln.Close()
+			return nil, fmt.Errorf("failed to get listener file for child: %v", err)
+		}
+		defer listenerFile.Close() // We can close the file descriptor copy after start
+		cmd.Stdin = listenerFile
+	} else {
+		cmd = exec.Command(appPath, socketPath)
 	}
+
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		if ln != nil {
+			ln.Close()
+		}
 		return nil, fmt.Errorf("failed to create stderr pipe for %s: %v", appPath, err)
 	}
 
+	var stdoutToLog io.ReadCloser
+	if !isStdio {
+		var err error
+		stdoutToLog, err = cmd.StdoutPipe()
+		if err != nil {
+			if ln != nil {
+				ln.Close()
+			}
+			return nil, fmt.Errorf("failed to create stdout pipe for %s: %v", appPath, err)
+		}
+	}
+
 	if err := cmd.Start(); err != nil {
+		if ln != nil {
+			ln.Close()
+		}
 		return nil, fmt.Errorf("failed to start application %s: %v", appPath, err)
 	}
 
-	// Start goroutines to log stdout and stderr
-	go logStream(stdout, appPath, cmd.Process.Pid, "stdout")
 	go logStream(stderr, appPath, cmd.Process.Pid, "stderr")
+	if stdoutToLog != nil {
+		go logStream(stdoutToLog, appPath, cmd.Process.Pid, "stdout")
+	}
 
-	// Wait for the socket file to be created by the child
+	// Wait for the child to be ready by dialing the socket.
+	var conn net.Conn
+	var dialErr error
 	for i := 0; i < 100; i++ {
-		if _, err := os.Stat(socketPath); err == nil {
+		conn, dialErr = net.DialTimeout("unix", socketPath, 50*time.Millisecond)
+		if dialErr == nil {
+			conn.Close()
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	if dialErr != nil {
+		log.Printf("Failed to connect to child socket %s after timeout: %v", socketPath, dialErr)
+		// Attempt to kill the process we just started, as it's not responding
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+		if ln != nil {
+			ln.Close()
+		}
+		return nil, fmt.Errorf("failed to connect to child socket: %v", dialErr)
+	}
 
 	child := &childProcess{
-		cmd:           &execCmdWrapper{cmd: cmd}, // Wrap *exec.Cmd with execCmdWrapper
+		cmd:           &execCmdWrapper{cmd: cmd},
 		socketPath:    socketPath,
 		lastUsed:      time.Now(),
 		binaryPath:    appPath,
-		idleTimeout:   s.Config.DefaultIdleTimeout, // Initialize with the default idle timeout
-		binaryModTime: currentModTime,              // Store the current modification time
+		idleTimeout:   s.Config.DefaultIdleTimeout,
+		binaryModTime: currentModTime,
+		listener:      ln, // Store the listener
 	}
 	s.childProcesses[appPath] = child
 

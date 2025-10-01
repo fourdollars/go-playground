@@ -11,8 +11,10 @@ import (
 )
 
 func main() {
+	var mode string
 	r := http.NewServeMux()
 	r.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "Running Mode: %s\n", mode)
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprintf(w, "--- Request Details ---\n")
 		fmt.Fprintf(w, "Method: %s\n", r.Method)
@@ -42,6 +44,7 @@ func main() {
 	})
 	if os.Getenv("_") == "./app-env.fcgi" {
 		log.Print("Running as a standalone server")
+		mode = "standalone"
 		http.ListenAndServe(":8080", r)
 	} else if len(os.Args) == 2 {
 		socketPath := os.Args[1]
@@ -51,6 +54,7 @@ func main() {
 			os.Exit(1)
 		}
 		log.Print("Running as a FastCGI socket server")
+		mode = "socket"
 		err = fcgi.Serve(l, r)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "fcgi.Serve failed: %v\n", err)
@@ -58,6 +62,7 @@ func main() {
 		}
 	} else {
 		log.Print("Running as a FastCGI stdin server")
+		mode = "stdin"
 		if e := fcgi.Serve(nil, r); e != nil {
 			log.Fatal(e)
 		}
