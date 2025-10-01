@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -11,11 +12,14 @@ import (
 )
 
 func main() {
+	listenAddr := flag.String("listenAddr", "", "address for the standalone server to listen on")
+	flag.Parse()
+
 	var mode string
 	r := http.NewServeMux()
 	r.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "Running Mode: %s\n", mode)
 		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprintf(w, "Running Mode: %s\n\n", mode)
 		fmt.Fprintf(w, "--- Request Details ---\n")
 		fmt.Fprintf(w, "Method: %s\n", r.Method)
 		fmt.Fprintf(w, "URL Path: %s\n", r.URL.Path)
@@ -42,10 +46,11 @@ func main() {
 			fmt.Fprintf(w, "%s\n", env)
 		}
 	})
-	if os.Getenv("_") == "./app-env.fcgi" {
-		log.Print("Running as a standalone server")
+
+	if *listenAddr != "" {
+		log.Printf("Running as a standalone server on %s", *listenAddr)
 		mode = "standalone"
-		http.ListenAndServe(":8080", r)
+		http.ListenAndServe(*listenAddr, r)
 	} else if len(os.Args) == 2 {
 		socketPath := os.Args[1]
 		l, err := net.Listen("unix", socketPath)
