@@ -154,7 +154,7 @@ func (s *Spawner) cleanupChildProcesses() {
 				if child.listener != nil {
 					child.listener.Close()
 				} else {
-					if err := os.Remove(child.socketPath); err != nil {
+					if err := os.Remove(child.socketPath); err != nil && !os.IsNotExist(err) {
 						log.Printf("Error removing socket file %s: %v", child.socketPath, err)
 					}
 				}
@@ -173,7 +173,7 @@ func (s *Spawner) cleanupChildProcesses() {
 				if child.listener != nil {
 					child.listener.Close()
 				} else {
-					if err := os.Remove(child.socketPath); err != nil {
+					if err := os.Remove(child.socketPath); err != nil && !os.IsNotExist(err) {
 						log.Printf("Error removing socket file %s: %v", child.socketPath, err)
 					}
 				}
@@ -391,14 +391,20 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 		delete(s.childProcesses, appPath)
 	}
 
-	socketPath := filepath.Join(s.Config.SocketDir, filepath.Base(appPath)+".sock")
-	if err := os.MkdirAll(s.Config.SocketDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create socket directory: %v", err)
-	}
-	// Clean up old socket file if it exists
-	_ = os.Remove(socketPath)
-
 	isStdio := strings.HasSuffix(appPath, ".fcgi.stdio")
+	var socketPath string
+	if isStdio {
+		// Use an abstract socket for stdio mode
+		socketPath = filepath.Join(s.Config.SocketDir, filepath.Base(appPath)+".sock")
+		socketPath = "\x00" + socketPath
+	} else {
+		socketPath = filepath.Join(s.Config.SocketDir, filepath.Base(appPath)+".sock")
+		if err := os.MkdirAll(s.Config.SocketDir, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create socket directory: %v", err)
+		}
+		// Clean up old socket file if it exists
+		_ = os.Remove(socketPath)
+	}
 
 	var cmd *exec.Cmd
 	var ln net.Listener
@@ -494,7 +500,11 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 	}
 	s.childProcesses[appPath] = child
 
-	log.Printf("Started new child process for %s (PID: %d) on socket %s", appPath, child.cmd.Process().Pid(), child.socketPath)
+	if isStdio {
+		log.Printf("Started new stdio child process for %s (PID: %d)", appPath, child.cmd.Process().Pid())
+	} else {
+		log.Printf("Started new socket child process for %s (PID: %d) on socket %s", appPath, child.cmd.Process().Pid(), child.socketPath)
+	}
 
 	return child, nil
 }

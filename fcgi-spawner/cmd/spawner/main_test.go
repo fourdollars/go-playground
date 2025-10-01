@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"net"
 	"os"
 	"syscall"
 	"testing"
@@ -14,10 +15,10 @@ var osStat = os.Stat
 
 // Mock for os.Process
 type mockProcess struct {
-	pid    int
+	pid       int
 	signalErr error
 	waitErr   error
-	exited bool
+	exited    bool
 }
 
 func (m *mockProcess) Signal(sig os.Signal) error {
@@ -42,9 +43,9 @@ func (m *mockProcess) Pid() int {
 
 // Mock for exec.Cmd
 type mockCmd struct {
-	process *mockProcess
+	process  *mockProcess
 	startErr error
-	path string
+	path     string
 }
 
 func (m *mockCmd) Start() error {
@@ -67,6 +68,15 @@ func (m *mockCmd) ProcessState() *os.ProcessState {
 
 func (m *mockCmd) Path() string {
 	return m.path
+}
+
+// mockListener to simulate net.Listener
+type mockListener struct {
+	net.Listener
+}
+
+func (m *mockListener) Close() error {
+	return nil
 }
 
 // Helper to reset mocks
@@ -280,6 +290,22 @@ func TestCleanupChildProcesses(t *testing.T) {
 			idleTimeout:        0, // No idle timeout
 			expectedChildCount: 1,
 			expectedRemoved:    []string{},
+		},
+		{
+			name: "idle stdio process, timeout reached",
+			initialChild: map[string]*childProcess{
+				"/app/idle.fcgi.stdio": {
+					cmd: &mockCmd{
+						process: &mockProcess{pid: 104, exited: false},
+					},
+					socketPath: "\x00/tmp/idle.sock",
+					lastUsed:   time.Now().Add(-10 * time.Minute), // 10 minutes ago
+					listener:   &mockListener{},
+				},
+			},
+			idleTimeout:        5 * time.Minute,
+			expectedChildCount: 0,
+			expectedRemoved:    []string{}, // No socket file to remove for abstract sockets
 		},
 	}
 
