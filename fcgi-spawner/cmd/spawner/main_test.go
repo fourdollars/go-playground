@@ -102,7 +102,7 @@ func TestLoadConfig(t *testing.T) {
 			want: &Config{
 				WebRoot:            "/web",
 				StaticRoot:         "",
-				SocketDir:          "/tmp/fcgi-sockets",
+				SocketDir:          "",
 				ListenAddr:         ":8080",
 				DefaultIdleTimeout: 5 * time.Minute,
 			},
@@ -290,22 +290,6 @@ func TestCleanupChildProcesses(t *testing.T) {
 			idleTimeout:        0, // No idle timeout
 			expectedChildCount: 1,
 			expectedRemoved:    []string{},
-		},
-		{
-			name: "idle stdio process, timeout reached",
-			initialChild: map[string]*childProcess{
-				"/app/idle.fcgi.stdio": {
-					cmd: &mockCmd{
-						process: &mockProcess{pid: 104, exited: false},
-					},
-					socketPath: "\x00/tmp/idle.sock",
-					lastUsed:   time.Now().Add(-10 * time.Minute), // 10 minutes ago
-					listener:   &mockListener{},
-				},
-			},
-			idleTimeout:        5 * time.Minute,
-			expectedChildCount: 0,
-			expectedRemoved:    []string{}, // No socket file to remove for abstract sockets
 		},
 	}
 

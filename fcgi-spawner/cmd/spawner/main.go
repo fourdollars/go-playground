@@ -34,7 +34,7 @@ func loadConfig() *Config {
 	cfg := &Config{}
 	flag.StringVar(&cfg.WebRoot, "webRoot", "/web", "Root directory for web files")
 	flag.StringVar(&cfg.StaticRoot, "staticRoot", "", "Optional root directory for static files. If specified, files in this directory will be served.")
-	flag.StringVar(&cfg.SocketDir, "socketDir", "/tmp/fcgi-sockets", "Directory for FastCGI application sockets")
+	flag.StringVar(&cfg.SocketDir, "socketDir", "", "Directory for FastCGI application sockets. If empty, stdio mode is used.")
 	flag.StringVar(&cfg.ListenAddr, "listenAddr", ":8080", "Address for the spawner to listen on (e.g., :8080)")
 	flag.DurationVar(&cfg.DefaultIdleTimeout, "idleTimeout", 5*time.Minute, "Idle timeout for child processes (e.g., 1m, 5m, 1h)")
 	flag.Parse()
@@ -319,7 +319,7 @@ func (s *Spawner) spawnerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Check if the requested path is an executable FCGI application
 	fileInfo, err := os.Stat(targetPath)
-	if err == nil && fileInfo.Mode().IsRegular() && (fileInfo.Mode().Perm()&0111 != 0) && (strings.HasSuffix(targetPath, ".fcgi") || strings.HasSuffix(targetPath, ".fcgi.stdio")) {
+	if err == nil && fileInfo.Mode().IsRegular() && (fileInfo.Mode().Perm()&0111 != 0) && strings.HasSuffix(targetPath, ".fcgi") {
 		child, err := s.getOrCreateChild(targetPath)
 		if err != nil {
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -384,32 +384,34 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 		if child.listener != nil {
 			child.listener.Close()
 		} else {
-			if err := os.Remove(child.socketPath); err != nil {
+			if err := os.Remove(child.socketPath); err != nil && !os.IsNotExist(err) {
 				log.Printf("Error removing socket file %s: %v", child.socketPath, err)
 			}
 		}
 		delete(s.childProcesses, appPath)
 	}
 
-	isStdio := strings.HasSuffix(appPath, ".fcgi.stdio")
+	useSocketMode := s.Config.SocketDir != ""
 	var socketPath string
-	if isStdio {
-		// Use an abstract socket for stdio mode
-		socketPath = filepath.Join(s.Config.SocketDir, filepath.Base(appPath)+".sock")
-		socketPath = "\x00" + socketPath
-	} else {
+	if useSocketMode {
 		socketPath = filepath.Join(s.Config.SocketDir, filepath.Base(appPath)+".sock")
 		if err := os.MkdirAll(s.Config.SocketDir, 0755); err != nil {
 			return nil, fmt.Errorf("failed to create socket directory: %v", err)
 		}
 		// Clean up old socket file if it exists
 		_ = os.Remove(socketPath)
+	} else {
+		// Use an abstract socket for stdio mode
+		socketPath = filepath.Join("/tmp/fcgi-spawner-sockets", filepath.Base(appPath)+".sock")
+		socketPath = "\x00" + socketPath
 	}
 
 	var cmd *exec.Cmd
 	var ln net.Listener
 
-	if isStdio {
+	if useSocketMode {
+		cmd = exec.Command(appPath, socketPath)
+	} else {
 		cmd = exec.Command(appPath)
 		var err error
 		ln, err = net.Listen("unix", socketPath)
@@ -430,8 +432,6 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 		}
 		defer listenerFile.Close() // We can close the file descriptor copy after start
 		cmd.Stdin = listenerFile
-	} else {
-		cmd = exec.Command(appPath, socketPath)
 	}
 
 	stderr, err := cmd.StderrPipe()
@@ -443,7 +443,7 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 	}
 
 	var stdoutToLog io.ReadCloser
-	if !isStdio {
+	if useSocketMode { // Only capture stdout for socket mode
 		var err error
 		stdoutToLog, err = cmd.StdoutPipe()
 		if err != nil {
@@ -500,10 +500,10 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 	}
 	s.childProcesses[appPath] = child
 
-	if isStdio {
-		log.Printf("Started new stdio child process for %s (PID: %d)", appPath, child.cmd.Process().Pid())
-	} else {
+	if useSocketMode {
 		log.Printf("Started new socket child process for %s (PID: %d) on socket %s", appPath, child.cmd.Process().Pid(), child.socketPath)
+	} else {
+		log.Printf("Started new stdio child process for %s (PID: %d)", appPath, child.cmd.Process().Pid())
 	}
 
 	return child, nil
