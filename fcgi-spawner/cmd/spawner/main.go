@@ -153,11 +153,12 @@ func (s *Spawner) cleanupChildProcesses() {
 				}
 				if child.listener != nil {
 					child.listener.Close()
+				} else {
+					if err := os.Remove(child.socketPath); err != nil {
+						log.Printf("Error removing socket file %s: %v", child.socketPath, err)
+					}
 				}
 				delete(s.childProcesses, appPath)
-				if err := os.Remove(child.socketPath); err != nil {
-					log.Printf("Error removing socket file %s: %v", child.socketPath, err)
-				}
 				continue // Move to the next child process
 			}
 
@@ -171,11 +172,12 @@ func (s *Spawner) cleanupChildProcesses() {
 				}
 				if child.listener != nil {
 					child.listener.Close()
+				} else {
+					if err := os.Remove(child.socketPath); err != nil {
+						log.Printf("Error removing socket file %s: %v", child.socketPath, err)
+					}
 				}
 				delete(s.childProcesses, appPath)
-				if err := os.Remove(child.socketPath); err != nil {
-					log.Printf("Error removing socket file %s: %v", child.socketPath, err)
-				}
 			}
 		}
 		s.childProcessesMu.Unlock()
@@ -381,9 +383,10 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 		}
 		if child.listener != nil {
 			child.listener.Close()
-		}
-		if err := os.Remove(child.socketPath); err != nil {
-			log.Printf("Error removing socket file %s: %v", child.socketPath, err)
+		} else {
+			if err := os.Remove(child.socketPath); err != nil {
+				log.Printf("Error removing socket file %s: %v", child.socketPath, err)
+			}
 		}
 		delete(s.childProcesses, appPath)
 	}
