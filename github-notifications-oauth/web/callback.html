@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Logging in...</title>
+</head>
+<body>
+    <p>Authentication successful, redirecting you to the main page...</p>
+    <script>
+        // The Go template will render the access token here
+        const accessToken = "{{.}}";
+
+        if (accessToken) {
+            // Store the token in Local Storage
+            localStorage.setItem('github_token', accessToken);
+            // Redirect to the main page
+            window.location.href = '/';
+        } else {
+            // If no token is received, show an error and redirect
+            alert('Login failed. Could not retrieve authorization token.');
+            window.location.href = '/';
+        }
+    </script>
+</body>
+</html>

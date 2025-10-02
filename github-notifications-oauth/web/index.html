@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHub Notification Manager</title>
+    <!-- Using Tailwind CSS for quick styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 font-sans">
+
+    <div class="container mx-auto p-4 sm:p-8">
+        <header class="mb-8 flex justify-between items-center">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800">Your GitHub Notifications</h1>
+                <p id="sub-header" class="text-gray-600">Please log in to view your notifications.</p>
+            </div>
+            <!-- Logout button, hidden by default -->
+            <button id="logout-btn" class="hidden bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-300">
+                Logout
+            </button>
+        </header>
+
+        <!-- Login Section -->
+        <div id="login-container" class="bg-white p-8 rounded-lg shadow-sm text-center">
+            <h2 class="text-xl font-semibold text-gray-700 mb-4">Welcome!</h2>
+            <p class="text-gray-600 mb-6">Click the button below to securely log in with your GitHub account.</p>
+            <a href="/login" class="inline-block bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 px-6 rounded-lg transition-colors duration-300">
+                Login with GitHub
+            </a>
+        </div>
+
+        <!-- Notifications Display Section, hidden by default -->
+        <main id="notifications-container" class="hidden">
+            <!-- Notifications will be dynamically inserted here by JavaScript -->
+        </main>
+
+        <footer class="text-center text-gray-500 mt-12">
+            <p>Go + GitHub OAuth Example</p>
+        </footer>
+    </div>
+
+    <script>
+        // DOM Elements
+        const loginContainer = document.getElementById('login-container');
+        const notificationsContainer = document.getElementById('notifications-container');
+        const logoutBtn = document.getElementById('logout-btn');
+        const subHeader = document.getElementById('sub-header');
+
+        // Get token from Local Storage
+        const getToken = () => {
+            return localStorage.getItem('github_token');
+        };
+        
+        // Logout function
+        const logout = () => {
+            localStorage.removeItem('github_token');
+            // Update UI to logged-out state
+            loginContainer.classList.remove('hidden');
+            notificationsContainer.classList.add('hidden');
+            logoutBtn.classList.add('hidden');
+            subHeader.textContent = 'Please log in to view your notifications.';
+        };
+
+        // Load notifications
+        const loadNotifications = async () => {
+            const token = getToken();
+            if (!token) {
+                // If no token, ensure the login screen is visible
+                logout();
+                return;
+            }
+
+            // Update UI to logged-in state
+            loginContainer.classList.add('hidden');
+            notificationsContainer.classList.remove('hidden');
+            logoutBtn.classList.remove('hidden');
+            subHeader.textContent = 'Here are your unread notifications.';
+            notificationsContainer.innerHTML = `<p class="text-center text-gray-500">Loading notifications...</p>`;
+
+            try {
+                const response = await fetch('/api/notifications', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (response.status === 401) {
+                    // Token might be expired or invalid
+                    alert('Authorization has expired or is invalid. Please log in again.');
+                    logout();
+                    return;
+                }
+
+                if (!response.ok) {
+                    throw new Error(`HTTP Error! Status: ${response.status}`);
+                }
+
+                const notifications = await response.json();
+                renderNotifications(notifications);
+
+            } catch (error) {
+                console.error('Could not load notifications:', error);
+                notificationsContainer.innerHTML = `
+                    <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg relative" role="alert">
+                        <strong class="font-bold">Failed to load!</strong>
+                        <span class="block sm:inline">Could not retrieve notifications. Please try logging out and back in, or check the console for more information.</span>
+                    </div>
+                `;
+            }
+        };
+
+        // Render notifications to the page
+        const renderNotifications = (notifications) => {
+            if (!notifications || notifications.length === 0) {
+                notificationsContainer.innerHTML = `
+                    <div class="bg-white border border-gray-200 rounded-lg p-8 text-center shadow-sm">
+                        <h2 class="text-xl font-semibold text-gray-700">All caught up!</h2>
+                        <p class="text-gray-500 mt-2">You have no unread notifications.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            notificationsContainer.innerHTML = notifications.map(n => `
+                <div class="bg-white border border-gray-200 rounded-lg p-4 shadow-sm flex flex-col sm:flex-row justify-between sm:items-center mb-4">
+                    <div class="flex-grow mb-4 sm:mb-0 sm:mr-4">
+                        <div class="font-semibold text-blue-600">[${n.repository.full_name}]</div>
+                        <p class="text-gray-800 mt-1">${n.subject.title}</p>
+                        <span class="text-sm text-gray-500 capitalize bg-gray-200 px-2 py-1 rounded-full mt-2 inline-block">
+                            Reason: ${n.reason}
+                        </span>
+                    </div>
+                    <div class="flex-shrink-0">
+                        <button 
+                            class="w-full sm:w-auto bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-300 mark-as-read-btn"
+                            data-thread-id="${n.id}">
+                            Mark as Read
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        };
+
+        // Mark a notification as read
+        const markAsRead = async (threadId) => {
+            const token = getToken();
+            if (!token) {
+                alert('Token not found. Cannot complete the operation.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/mark-as-read', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ thread_id: parseInt(threadId, 10) })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to mark as read');
+                }
+                
+                // Reload the notification list on success
+                loadNotifications();
+
+            } catch (error) {
+                console.error('Error marking as read:', error);
+                alert('An error occurred while marking the notification as read.');
+            }
+        };
+
+        // --- Event Listeners ---
+
+        // Click event for the logout button
+        logoutBtn.addEventListener('click', logout);
+
+        // Use event delegation for "Mark as Read" button clicks
+        notificationsContainer.addEventListener('click', (event) => {
+            if (event.target.classList.contains('mark-as-read-btn')) {
+                const threadId = event.target.dataset.threadId;
+                if (threadId) {
+                    markAsRead(threadId);
+                }
+            }
+        });
+
+        // After the page loads, check for a token and load notifications if it exists
+        document.addEventListener('DOMContentLoaded', () => {
+            if (getToken()) {
+                loadNotifications();
+            }
+        });
+    </script>
+</body>
+</html>
