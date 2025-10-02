@@ -2,6 +2,8 @@
 
 A Single Page Application (SPA) built with Go for the backend API and vanilla JavaScript for the frontend, designed to securely read and manage your GitHub notifications. This version leverages the GitHub OAuth2 flow, eliminating the need for manual Personal Access Tokens and providing a seamless, secure authentication experience.
 
+Demo Site: https://ghno.sylee.org
+
 ## Table of Contents
 - [Introduction](#introduction)
 - [Features](#features)
