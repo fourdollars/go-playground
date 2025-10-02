@@ -22,6 +22,7 @@ func main() {
 		fmt.Fprintf(w, "Running Mode: %s\n\n", mode)
 		fmt.Fprintf(w, "--- Request Details ---\n")
 		fmt.Fprintf(w, "Method: %s\n", r.Method)
+		fmt.Fprintf(w, "Host: %s\n", r.Host)
 		fmt.Fprintf(w, "URL Path: %s\n", r.URL.Path)
 		fmt.Fprintf(w, "Query String: %s\n", r.URL.RawQuery)
 		fmt.Fprintf(w, "Remote Address: %s\n", r.RemoteAddr)

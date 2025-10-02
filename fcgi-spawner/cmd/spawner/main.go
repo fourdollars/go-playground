@@ -391,6 +391,30 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 		delete(s.childProcesses, appPath)
 	}
 
+	// Load environment variables from .env file if it exists
+	var childEnv []string
+	envFilePath := strings.TrimSuffix(appPath, ".fcgi") + ".env"
+	if _, err := os.Stat(envFilePath); err == nil {
+		log.Printf("Loading environment file: %s", envFilePath)
+		envFile, err := os.Open(envFilePath)
+		if err != nil {
+			return nil, fmt.Errorf("could not open env file %s: %v", envFilePath, err)
+		}
+		defer envFile.Close()
+
+		childEnv = os.Environ() // Start with parent's environment
+		scanner := bufio.NewScanner(envFile)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line != "" && !strings.HasPrefix(line, "#") {
+				parts := strings.SplitN(line, "=", 2)
+				if len(parts) == 2 {
+					childEnv = append(childEnv, line)
+				}
+			}
+		}
+	}
+
 	useSocketMode := s.Config.SocketDir != ""
 	var socketPath string
 	if useSocketMode {
@@ -432,6 +456,10 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 		}
 		defer listenerFile.Close() // We can close the file descriptor copy after start
 		cmd.Stdin = listenerFile
+	}
+
+	if childEnv != nil {
+		cmd.Env = childEnv
 	}
 
 	stderr, err := cmd.StderrPipe()
@@ -535,6 +563,7 @@ func (s *Spawner) proxyRequest(w http.ResponseWriter, r *http.Request, child *ch
 	env["DOCUMENT_ROOT"] = s.Config.WebRoot
 	env["SERVER_SOFTWARE"] = "go-fcgi-spawner"
 	env["REMOTE_ADDR"] = r.RemoteAddr
+	env["HTTP_HOST"] = r.Host
 
 	for name, headers := range r.Header {
 		for _, h := range headers {
