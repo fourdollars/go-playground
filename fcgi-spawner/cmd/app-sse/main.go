@@ -43,26 +43,25 @@ func sseHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		log.Fatal("Expected socket path as an argument")
-	}
-	socketPath := os.Args[1]
-
-	// Remove old socket file if it exists
-	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
-		log.Fatalf("Could not remove old socket: %v", err)
-	}
-
-	ln, err := net.Listen("unix", socketPath)
-	if err != nil {
-		log.Fatalf("Failed to listen on socket: %v", err)
-	}
-	defer ln.Close()
-
-	http.HandleFunc("/", sseHandler)
-
-	log.Println("SSE FCGI server starting on socket:", socketPath)
-	if err := fcgi.Serve(ln, nil); err != nil {
-		log.Fatalf("fcgi.Serve failed: %v", err)
+	r := http.NewServeMux()
+	r.HandleFunc("/", sseHandler)
+	if len(os.Args) == 2 {
+		socketPath := os.Args[1]
+		l, err := net.Listen("unix", socketPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "net.Listen failed: %v\n", err)
+			os.Exit(1)
+		}
+		log.Print("Running as a FastCGI socket server")
+		err = fcgi.Serve(l, r)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "fcgi.Serve failed: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		log.Print("Running as a FastCGI stdin server")
+		if e := fcgi.Serve(nil, r); e != nil {
+			log.Fatal(e)
+		}
 	}
 }
