@@ -2,30 +2,32 @@
 
 This project provides a "spawner" service written in Go, designed to manage and proxy requests to a dynamic pool of FastCGI applications. It enables a convenient "drop-in" deployment model: simply place a compiled FastCGI executable into a designated directory, and the spawner makes it immediately accessible.
 
-The spawner is designed for efficiency and flexibility, exclusively supporting **Socket-based (`.fcgi`)** applications. These applications are given a Unix socket path via the command line, which the spawner provides when it starts them. The spawner *requires* the `-socketDir` flag to be provided for operation.
+The spawner is designed for efficiency and flexibility, supporting two modes of operation:
+- **Socket Mode**: If the `-socketDir` flag is provided, the spawner will manage Unix sockets for each application, passing the socket path as a command-line argument. This is the recommended mode for production.
+- **Stdio Mode**: If `-socketDir` is omitted, the spawner falls back to the classic FastCGI model, communicating with child processes over `stdin`/`stdout`. This is useful for simpler applications or environments where socket management is not desired.
 
 In addition to managing applications, the spawner can also serve static files (HTML, CSS, etc.), acting as a simple, lightweight web server.
 
 ## ✨ Features
 
 -   **Drop-in Deployment**: Add new FastCGI applications by simply uploading a compiled binary. No need to restart or reload Nginx.
--   **Socket-Based FCGI**: Supports traditional FastCGI applications that communicate over Unix sockets. The spawner *requires* the `-socketDir` flag.
+-   **Dual FCGI Modes**: Supports both **Socket-based** and **Stdio-based** FastCGI applications, configurable via the `-socketDir` flag.
 -   **Persistent Processes**: Manages a pool of running FastCGI applications, reusing processes for multiple requests for high performance. This is **not** a CGI-like model.
 -   **Idle Process Management**: Automatically terminates application processes after a configurable idle period (`-idleTimeout`) to conserve resources.
 -   **Hot-Reloading**: Automatically detects changes (file writes) to `.fcgi` binaries in the `webRoot` and restarts the corresponding child process.
 -   **Static File Serving**: Optionally serve static files from a designated directory (`-staticRoot`). Hidden files (starting with `.`) are not served.
--   **Child Process Logging**: Captures and logs the `stdout` and `stderr` of each spawned FastCGI application for easy debugging.
+-   **Child Process Logging**: Captures and logs the `stdout` (in socket mode) and `stderr` of each spawned FastCGI application for easy debugging.
 -   **Security Conscious**: Includes path safety checks to prevent directory traversal attacks.
 
 ## 🏛️ Architecture
 
-The spawner runs as a persistent service that listens for HTTP requests, typically proxied from a web server like Nginx. When a request arrives, the spawner identifies the target FastCGI application, starts it if it's not already running, and proxies the request to it.
+The spawner runs as a persistent service that listens for HTTP requests, typically proxied from a web server like Nginx. When a request arrives, the spawner identifies the target FastCGI application, starts it if it's not already running, and proxies the request to it using the configured mode (socket or stdio).
 
 ```
                   +---------+      +-------------------+      +----------------------+
 User Request      |         |      |                   |      |                      |
 ----------------->|  Nginx  |----->|  Spawner Service  |----->| Your FCGI App Process|
-                  |         |      |  (spawner)        |      | (e.g., app-hello.fcgi)|
+                  |         |      |  (spawner)        |      | (e.g., hello.fcgi)   |
                   +---------+      +-------------------+      +----------------------+
                                             |
                                             | Serves static file
@@ -41,8 +43,9 @@ User Request      |         |      |                   |      |                 
 1.  The spawner receives an HTTP request (e.g., for `/my-app.fcgi`).
 2.  It checks if a child process for `my-app.fcgi` is already running and if its binary hasn't been modified.
 3.  **If running and up-to-date**, it proxies the request to the existing process.
-4.  **If not running, or if the binary has changed**, it starts the `my-app.fcgi` executable, passing a Unix socket path as an argument (since `-socketDir` is required).
-    It then keeps the process running and proxies the request.
+4.  **If not running, or if the binary has changed**, it starts the `my-app.fcgi` executable.
+    - In **Socket Mode**, it passes a Unix socket path as a command-line argument.
+    - In **Stdio Mode**, it passes no arguments and prepares to communicate over the process's stdin.
 5.  If the requested path does not match an executable FCGI application, the spawner attempts to serve it as a static file (if `-staticRoot` is configured).
 6.  Running child processes are monitored and terminated if they remain idle for a specified duration (`-idleTimeout`).
 7.  Changes to `.fcgi` binaries in the `webRoot` directory trigger a restart of the corresponding child process.
@@ -53,10 +56,11 @@ User Request      |         |      |                   |      |                 
 fcgi-spawner/
 ├── cmd/                # Source code for all executables
 │   ├── spawner/        # The core Spawner service
-│   ├── app-env/        # Example Application
-│   ├── app-hello/      # Example Application
-│   ├── app-sse/        # Example Application (Server-Sent Events)
-│   ├── app-time/       # Example Application
+│   ├── auth/           # Example OAuth2 Login Application
+│   ├── env/            # Example Application
+│   ├── hello/          # Example Application
+│   ├── sse/            # Example Application (Server-Sent Events)
+│   ├── time/           # Example Application
 │   └── webhook/        # Example Application
 ├── configs/            # Nginx and systemd/supervisor configuration templates
 ├── scripts/            # Automation scripts for building and deploying
@@ -70,15 +74,16 @@ fcgi-spawner/
 
 The `cmd/` directory includes several example applications to demonstrate different capabilities:
 
--   **`app-hello`**: A simple "Hello World" application that shows a basic HTML response.
--   **`app-env`**: A debugging tool that prints all request headers, environment variables, and other request details.
--   **`app-time`**: A basic application that displays the current server time.
--   **`app-sse`**: Demonstrates Server-Sent Events (SSE). It streams the server time to the client every 5 seconds, showing how to maintain a long-lived connection. You can test it with `curl -N http://localhost:8080/app-sse.fcgi`.
+-   **`auth`**: A complete OAuth2 login example that supports Google, Facebook, and GitHub. It demonstrates session management and requires environment variables for client secrets (e.g., `GOOGLE_CLIENT_ID`, `SESSION_KEY`).
+-   **`hello`**: A simple "Hello World" application that shows a basic HTML response.
+-   **`env`**: A debugging tool that prints all request headers, environment variables, and other request details. This app is a great example of supporting both socket and stdio modes.
+-   **`time`**: A basic application that displays the current server time.
+-   **`sse`**: Demonstrates Server-Sent Events (SSE). It streams the server time to the client, showing how to maintain a long-lived connection.
 -   **`webhook`**: A more complex application using the Gin framework. It's designed to receive webhooks from services like GitHub or Launchpad and forward them to a chat service like Mattermost.
 
 ## 🐳 Docker Deployment
 
-This project includes a `Dockerfile` for easy, containerized deployment. This method bundles Nginx, Supervisor, and the spawner into a single image. The spawner in the Docker image is configured to use socket-based FCGI applications (by providing the `-socketDir` flag).
+This project includes a `Dockerfile` for easy, containerized deployment. This method bundles Nginx, Supervisor, and the spawner into a single image. The provided configuration runs the spawner in **socket mode**.
 
 #### Step 1: Build the Docker Image
 ```bash
@@ -101,13 +106,12 @@ docker run -d -p 8080:80 -v "$(pwd)/web:/var/www/fcgi" --name fcgi-container fcg
 #### Step 4: Test
 You can now test the endpoints for your `.fcgi` applications.
 ```bash
-# Test a socket-based app
-curl http://localhost:8080/app-env.fcgi
+curl http://localhost:8080/env.fcgi
 ```
 
 ## 🚀 Manual Deployment Guide (systemd)
 
-This guide is for deploying the service directly on a Linux server with `systemd`. The spawner in this setup will use socket-based FCGI applications (by providing the `-socketDir` flag).
+This guide is for deploying the service directly on a Linux server with `systemd`. The provided `systemd` service file configures the spawner to use **socket mode**.
 
 ### Step 1: Build Binaries
 ```bash
@@ -144,17 +148,16 @@ chmod +x scripts/deploy.sh
 ### Step 4: Test
 You can now test the endpoints for your `.fcgi` applications.
 ```bash
-# Test a socket-based app
-curl http://<your_server_ip>/app-env.fcgi
+curl http://<your_server_ip>/env.fcgi
 ```
 
 ## 💡 How to Add Your Own Application
 
-The spawner *requires* the `-socketDir` flag to be provided, meaning it exclusively supports socket-based applications. Your application's code needs to be written to handle a Unix socket path provided as a command-line argument.
+You can write your FastCGI application to run in socket mode, stdio mode, or create a flexible app that supports both.
 
-### Socket-Based Applications (File Name Convention: `my-app.fcgi`)
+### Socket-Based Applications (Recommended)
 
-These applications receive a Unix socket path as a command-line argument and create a `net.Listener` on that path.
+These applications receive a Unix socket path as a command-line argument and create a `net.Listener` on that path. This is the most robust method.
 
 ```go
 // cmd/my-socket-app/main.go
@@ -183,9 +186,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to listen on socket: %v", err)
 	}
-	defer ln.Close() // Ensure the listener is closed when the app exits
+	defer ln.Close()
 
-	// Example handler
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Hello from socket app!"))
 	})
@@ -196,6 +198,33 @@ func main() {
 	}
 }
 ```
+
+### Stdio-Based Applications
+
+These applications do not take command-line arguments and communicate over stdin/stdout. `fcgi.Serve` with a `nil` listener handles this automatically.
+
+```go
+// cmd/my-stdio-app/main.go
+package main
+
+import (
+	"log"
+	"net/http"
+	"net/http/fcgi"
+)
+
+func main() {
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Hello from stdio app!"))
+	})
+
+	log.Println("Stdio-based FCGI server starting...")
+	if err := fcgi.Serve(nil, nil); err != nil {
+		log.Fatalf("fcgi.Serve failed: %v", err)
+	}
+}
+```
+*Note: The `env`, `sse`, and `auth` applications are great examples of flexible apps that support both modes.*
 
 ### Deployment Steps
 
@@ -219,7 +248,7 @@ sudo journalctl -u fcgi-spawner.service -f
 
 Common issues:
 -   **502 Bad Gateway**: The child process is likely crashing or not responding. Check the spawner logs for errors from your application.
--   **Connection Errors**: Ensure your application is a socket-based `.fcgi` application and that the spawner is configured with `-socketDir`.
+-   **Connection Errors**: If using socket mode, ensure the spawner has permissions to write to the `-socketDir`.
 
 ## 📄 License
 

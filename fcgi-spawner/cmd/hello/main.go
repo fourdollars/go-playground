@@ -11,7 +11,7 @@ import (
 func helloHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintln(w, "<h1>Hello from Go FastCGI!</h1>")
-	fmt.Fprintln(w, "<p>This is the 'app-hello' application.</p>")
+	fmt.Fprintln(w, "<p>This is the 'hello' application.</p>")
 }
 
 func main() {

@@ -156,7 +156,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 
 	pathPrefix := ""
 	if isFcgiMode {
-		pathPrefix = "/app-auth.fcgi"
+		pathPrefix = "/auth.fcgi"
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -184,7 +184,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request, config *oauth2.Config, 
 
 	pathPrefix := ""
 	if isFcgiMode {
-		pathPrefix = "/app-auth.fcgi"
+		pathPrefix = "/auth.fcgi"
 	}
 
 	conf := *config
@@ -217,7 +217,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, config *oauth2.Confi
 
 	pathPrefix := ""
 	if isFcgiMode {
-		pathPrefix = "/app-auth.fcgi"
+		pathPrefix = "/auth.fcgi"
 	}
 
 	conf := *config
@@ -265,7 +265,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, config *oauth2.Confi
 
 	pathPrefix = ""
 	if isFcgiMode {
-		pathPrefix = "/app-auth.fcgi"
+		pathPrefix = "/auth.fcgi"
 	}
 	http.Redirect(w, r, pathPrefix+"/", http.StatusTemporaryRedirect)
 }
@@ -288,7 +288,7 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 
 	pathPrefix := ""
 	if isFcgiMode {
-		pathPrefix = "/app-auth.fcgi"
+		pathPrefix = "/auth.fcgi"
 	}
 	http.Redirect(w, r, pathPrefix+"/", http.StatusTemporaryRedirect)
 }

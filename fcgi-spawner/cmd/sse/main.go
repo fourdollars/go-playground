@@ -23,6 +23,13 @@ func sseHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("Client connected for SSE.")
 
+	// Send an initial event immediately on connection
+	initialTime := time.Now()
+	fmt.Fprintf(w, "event: time\n")
+	fmt.Fprintf(w, "data: %v\n", initialTime.Format(time.RFC1123))
+	fmt.Fprintf(w, "id: %v\n\n", initialTime.UnixNano()/int64(time.Millisecond))
+	flusher.Flush()
+
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
