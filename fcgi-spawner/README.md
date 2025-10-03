@@ -55,6 +55,7 @@ fcgi-spawner/
 │   ├── spawner/        # The core Spawner service
 │   ├── app-env/        # Example Application
 │   ├── app-hello/      # Example Application
+│   ├── app-sse/        # Example Application (Server-Sent Events)
 │   ├── app-time/       # Example Application
 │   └── webhook/        # Example Application
 ├── configs/            # Nginx and systemd/supervisor configuration templates
@@ -64,6 +65,16 @@ fcgi-spawner/
 ├── Dockerfile          # For containerized deployment
 └── README.md
 ```
+
+## 📦 Example Applications
+
+The `cmd/` directory includes several example applications to demonstrate different capabilities:
+
+-   **`app-hello`**: A simple "Hello World" application that shows a basic HTML response.
+-   **`app-env`**: A debugging tool that prints all request headers, environment variables, and other request details.
+-   **`app-time`**: A basic application that displays the current server time.
+-   **`app-sse`**: Demonstrates Server-Sent Events (SSE). It streams the server time to the client every 5 seconds, showing how to maintain a long-lived connection. You can test it with `curl -N http://localhost:8080/app-sse.fcgi`.
+-   **`webhook`**: A more complex application using the Gin framework. It's designed to receive webhooks from services like GitHub or Launchpad and forward them to a chat service like Mattermost.
 
 ## 🐳 Docker Deployment
 

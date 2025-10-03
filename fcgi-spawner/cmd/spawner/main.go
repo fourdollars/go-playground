@@ -596,7 +596,30 @@ func (s *Spawner) proxyRequest(w http.ResponseWriter, r *http.Request, child *ch
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		log.Printf("Failed to copy response body: %v", err)
+	// Explicitly flush headers
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	// Read from FCGI response body and write to client, flushing incrementally
+	buf := make([]byte, 4096) // 4KB buffer
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				log.Printf("Failed to write response chunk to client: %v", writeErr)
+				return // Client likely disconnected
+			}
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Printf("Failed to read from FCGI response body: %v", err)
+			return
+		}
 	}
 }
