@@ -404,7 +404,11 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 	}
 
 	// Load environment variables from .env file if it exists
-	var childEnv []string
+	var childEnv []string // Initialize as empty slice
+
+	// Hardcode PATH as a base. It can be overridden by .env file.
+	childEnv = append(childEnv, "PATH=/usr/local/bin:/usr/bin:/bin")
+
 	envFilePath := strings.TrimSuffix(appPath, ".fcgi") + ".env"
 	if _, err := os.Stat(envFilePath); err == nil {
 		log.Printf("Loading environment file: %s", envFilePath)
@@ -414,14 +418,25 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 		}
 		defer envFile.Close()
 
-		childEnv = os.Environ() // Start with parent's environment
 		scanner := bufio.NewScanner(envFile)
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
 			if line != "" && !strings.HasPrefix(line, "#") {
 				parts := strings.SplitN(line, "=", 2)
 				if len(parts) == 2 {
-					childEnv = append(childEnv, line)
+					// Check if this variable already exists (e.g., PATH) and overwrite it.
+					// Otherwise, append it.
+					found := false
+					for i, existingVar := range childEnv {
+						if strings.HasPrefix(existingVar, parts[0]+"=") {
+							childEnv[i] = line // Overwrite
+							found = true
+							break
+						}
+					}
+					if !found {
+						childEnv = append(childEnv, line) // Append new variable
+					}
 				}
 			}
 		}
@@ -470,9 +485,8 @@ func (s *Spawner) getOrCreateChild(appPath string) (*childProcess, error) {
 		cmd.Stdin = listenerFile
 	}
 
-	if childEnv != nil {
-		cmd.Env = childEnv
-	}
+	// Always set cmd.Env to the explicitly defined childEnv (which might be empty)
+	cmd.Env = childEnv
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
