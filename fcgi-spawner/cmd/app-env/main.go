@@ -9,6 +9,9 @@ import (
 	"net/http/fcgi"
 	"os"
 	"sort"
+
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 func main() {
@@ -51,7 +54,13 @@ func main() {
 	if *listenAddr != "" {
 		log.Printf("Running as a standalone server on %s", *listenAddr)
 		mode = "standalone"
-		http.ListenAndServe(*listenAddr, r)
+		h2s := &http2.Server{}
+		h2cHandler := h2c.NewHandler(r, h2s)
+		server := &http.Server{
+			Addr:    *listenAddr,
+			Handler: h2cHandler,
+		}
+		log.Fatal(server.ListenAndServe())
 	} else if len(os.Args) == 2 {
 		socketPath := os.Args[1]
 		l, err := net.Listen("unix", socketPath)

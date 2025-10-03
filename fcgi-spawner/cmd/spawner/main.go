@@ -18,6 +18,8 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	fcgiclient "github.com/tomasen/fcgi_client"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 // Config holds the spawner's configuration.
@@ -209,9 +211,19 @@ func main() {
 	// Start the file watcher goroutine
 	go spawner.watchFcgiBinaries()
 
-	http.HandleFunc("/", spawner.spawnerHandler)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", spawner.spawnerHandler)
+
+	h2s := &http2.Server{}
+	h2cHandler := h2c.NewHandler(mux, h2s)
+
+	server := &http.Server{
+		Addr:    spawner.Config.ListenAddr,
+		Handler: h2cHandler,
+	}
+
 	log.Printf("Spawner listening on %s", spawner.Config.ListenAddr)
-	if err := http.ListenAndServe(spawner.Config.ListenAddr, nil); err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }

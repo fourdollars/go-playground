@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/gorilla/sessions"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/facebook"
 	"golang.org/x/oauth2/github"
@@ -65,9 +67,13 @@ func main() {
 	if *listenAddr != "" {
 		isFcgiMode = false
 		log.Printf("Running as a standalone server on %s", *listenAddr)
-		if err := http.ListenAndServe(*listenAddr, mux); err != nil {
-			log.Fatal(err)
+		h2s := &http2.Server{}
+		h2cHandler := h2c.NewHandler(mux, h2s)
+		server := &http.Server{
+			Addr:    *listenAddr,
+			Handler: h2cHandler,
 		}
+		log.Fatal(server.ListenAndServe())
 	} else if len(os.Args) == 2 {
 		isFcgiMode = true
 		socketPath := os.Args[1]
