@@ -1,11 +1,15 @@
 [Unit]
-Description=Go FCGI Spawner Service
+Description=Standalone WebSocket Service
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/spawner -webRoot /var/www/fcgi -staticRoot /var/www/html -listenAddr :9000
+ExecStart=/var/www/fcgi/websocket.fcgi -listenAddr :9001
 User=www-data
 Group=www-data
+
+# Restart policy
+Restart=always
+RestartSec=3
 
 # Security settings
 PrivateTmp=true

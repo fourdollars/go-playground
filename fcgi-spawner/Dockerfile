@@ -68,11 +68,22 @@ priority=20\n\
 stdout_logfile=/dev/stdout\n\
 stdout_logfile_maxbytes=0\n\
 stderr_logfile=/dev/stderr\n\
-stderr_logfile_maxbytes=0\n\n" > /etc/supervisor/conf.d/supervisord.conf
+stderr_logfile_maxbytes=0\n\
+\n\
+[program:websocket]\n\
+command=/var/www/fcgi/websocket.fcgi -listenAddr :9001\n\
+autostart=true\n\
+autorestart=true\n\
+priority=30\n\
+stdout_logfile=/dev/stdout\n\
+stdout_logfile_maxbytes=0\n\
+stderr_logfile=/dev/stderr\n\
+stderr_logfile_maxbytes=0\n\
+\n\
+" > /etc/supervisor/conf.d/supervisord.conf
 
 # Expose port 80 for HTTP traffic
 EXPOSE 80
-EXPOSE 9000
 
 # Set the default command to run supervisord
 CMD ["/usr/bin/supervisord"]
