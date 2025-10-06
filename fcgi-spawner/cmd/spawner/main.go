@@ -320,8 +320,25 @@ func (s *Spawner) spawnerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	appName := filepath.Base(scriptPath)
-	targetPath := filepath.Join(s.Config.WebRoot, appName)
+	// Find the correct FCGI application path from the URL
+	var targetPath string
+	pathSegments := strings.Split(strings.Trim(scriptPath, "/"), "/")
+	currentPath := ""
+	for _, segment := range pathSegments {
+		currentPath = filepath.Join(currentPath, segment)
+		if strings.HasSuffix(currentPath, ".fcgi") {
+			potentialPath := filepath.Join(s.Config.WebRoot, currentPath)
+			if _, err := os.Stat(potentialPath); err == nil {
+				targetPath = potentialPath
+				break
+			}
+		}
+	}
+
+	// If no FCGI app was found in the path, fall back to original logic for static files.
+	if targetPath == "" {
+		targetPath = filepath.Join(s.Config.WebRoot, filepath.Base(scriptPath))
+	}
 
 	if !strings.HasPrefix(targetPath, s.Config.WebRoot) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
