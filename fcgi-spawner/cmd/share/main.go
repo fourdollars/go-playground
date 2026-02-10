@@ -198,8 +198,21 @@ func (h *ShareHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", cleanFilename))
-	w.Header().Set("Content-Type", "application/octet-stream")
+	buffer := make([]byte, 512)
+	n, err := f.Read(buffer)
+	if err != nil && err != io.EOF {
+		http.Error(w, "Failed to read file header", http.StatusInternalServerError)
+		return
+	}
+	contentType := http.DetectContentType(buffer[:n])
+
+	if _, err := f.Seek(0, 0); err != nil {
+		http.Error(w, "Failed to rewind file", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", cleanFilename))
+	w.Header().Set("Content-Type", contentType)
 
 	if _, err := io.Copy(w, f); err != nil {
 		fmt.Fprintf(os.Stderr, "Error sending file: %v\n", err)
