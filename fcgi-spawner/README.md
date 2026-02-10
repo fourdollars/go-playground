@@ -82,6 +82,7 @@ The `cmd/` directory includes several example applications to demonstrate differ
 -   **`env`**: A debugging tool that prints all request details. A great example of supporting both socket and stdio modes, as well as standalone mode.
 -   **`time`**: A basic application that displays the current server time.
 -   **`sse`**: Demonstrates Server-Sent Events (SSE), showing how to maintain a long-lived connection for streaming data to the client.
+-   **`share`**: A secure, ephemeral file sharing tool. Uploads are password-protected, and downloads use a cryptographic secret. Files are deleted immediately after the first successful download.
 -   **`webhook`**: A more complex application using the Gin framework for receiving webhooks.
 -   **`websocket`**: An application that demonstrates how to handle protocols like WebSockets that are incompatible with the FastCGI model. It includes a standalone HTTP server mode (`-listenAddr`) and serves as a template for applications that need to bypass the spawner.
 
